@@ -1,15 +1,33 @@
-# <img src="renderer/assets/grok-mark.svg" alt="" width="36" height="36" />
-Grok Build Desktop
+<div align="center">
 
-**Grok Build Desktop** is a macOS app for [Grok Build](https://github.com/xai-org/grok-build). Same Grok agent you use in the terminal — chats, files, tools, and your history — in a quiet dark window instead of a TUI.
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://media.x.ai/v1/website/spacexai-symbol-white-transparent-0c31957f.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png">
+    <img alt="SpaceXAI logo" src="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png" width="96">
+  </picture>
+  <br>
+  Grok Build Desktop (<code>desktop</code>)
+</h1>
 
-[Get started](#get-started) · [What you get](#what-you-get) · [Computer use](#computer-use) · [Settings](#settings)
+**Grok Build Desktop** is a macOS app for [Grok Build](https://github.com/xai-org/grok-build).
+Same Grok that lives in your terminal — chats, files, tools, and your history —
+in a quiet window instead of a TUI.
 
-[![Home](docs/screenshots/home.jpg)](docs/screenshots/home.jpg)
+[Get started](#get-started) ·
+[What you get](#what-you-get) ·
+[Computer use](#computer-use) ·
+[Settings](#settings)
 
-[![Chat](docs/screenshots/chat.jpg)](docs/screenshots/chat.jpg)
+![Home](docs/screenshots/home.jpg)
 
-Grok Build itself lives at [x.ai/cli](https://x.ai/cli). This app is a desktop shell around the Grok you already installed.
+![Chat](docs/screenshots/chat.jpg)
+
+**Grok Build is at [x.ai/cli](https://x.ai/cli)**
+
+This app is a desktop shell around the `grok` you already installed and signed in.
+
+</div>
 
 ---
 
@@ -42,9 +60,3 @@ You must grant **Screen Recording** and **Accessibility** to whatever launched t
 Theme, language, profile, usage, account, and providers live in the gear. App preferences are in `home/settings.yaml`. Keys go in `home/.credentials.yaml` (not in the yaml you sync or screenshot). Official Grok login stays in `~/.grok` — this app does not store that token.
 
 Add your own prompt files as `.md` in `home/prompts/`. The first `# heading` is the name in the menu.
-
-## Learn more
-
-- [Grok Build](https://github.com/xai-org/grok-build)
-- [docs.x.ai/build](https://docs.x.ai/build/overview)
-- `读我.txt` in this folder (Chinese)
