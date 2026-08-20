@@ -2,9 +2,9 @@
 
 <h1>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://media.x.ai/v1/website/spacexai-symbol-white-transparent-0c31957f.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png">
-    <img alt="SpaceXAI logo" src="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png" width="96">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/grok-mark-white.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/grok-mark-black.svg">
+    <img alt="Grok" src="docs/grok-mark-black.svg" width="96">
   </picture>
   <br>
   Grok Build Desktop (<code>not official</code>)
@@ -37,8 +37,10 @@ This app is a desktop shell around the `grok` you already installed and signed i
 ## Get started
 
 1. Install and sign in to [Grok Build](https://x.ai/cli) (`grok`) on this Mac.
-2. Double-click `启动 Grok Build.command` in this folder.
-3. The first launch downloads the desktop runtime (kept in a local cache, not in this folder). Close that terminal window to quit the app.
+2. Download the DMG from [Releases](https://github.com/oleyyu/grok-build-desktop/releases) (Apple silicon or Intel), open it, drag the app to Applications.
+3. First open: right-click the app → Open (it is unsigned). macOS may warn that the developer is unidentified.
+
+From source: double-click `启动 Grok Build.command` in this folder. The first launch downloads the desktop runtime into a local cache.
 
 You need macOS and a logged-in Grok account. Chats in the sidebar are the same sessions as `~/.grok/sessions` — pick up in the app what you started in the terminal, and the other way around.
 
