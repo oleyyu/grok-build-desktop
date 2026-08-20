@@ -1,0 +1,8 @@
+{
+  "name": "computer-use",
+  "version": "0.1.0",
+  "description": "让 Grok 看屏幕、动鼠标、敲键盘 —— macOS 本机 Computer Use（截图 + CGEvent 输入）",
+  "author": { "name": "Grok Build Desktop" },
+  "keywords": ["computer-use", "gui", "automation", "macos", "screenshot"],
+  "license": "MIT"
+}

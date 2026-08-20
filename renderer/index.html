@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Grok Build Desktop</title>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="dsh-shell.css">
+</head>
+<body>
+  <!-- Title bar; Logo = official Grok mark -->
+  <div id="titlebar">
+    <div class="traffic-gap"></div>
+    <div class="title"><svg class="glyph grok-mark" viewBox="0 0 512 512" aria-hidden="true"><path fill="currentColor" d="M210.484 312.759L343.465 210.383C349.984 205.364 359.302 207.322 362.408 215.117C378.758 256.231 371.454 305.64 338.925 339.563C306.397 373.487 261.137 380.927 219.768 363.983L174.577 385.803C239.394 432.008 318.104 420.581 367.289 369.251C406.303 328.564 418.386 273.104 407.088 223.091L407.19 223.198C390.807 149.726 411.218 120.359 453.03 60.3072C454.02 58.8833 455.01 57.4595 456 56L400.978 113.382V113.204L210.45 312.794"/><path fill="currentColor" d="M183.042 337.641C136.519 291.294 144.54 219.567 184.236 178.203C213.59 147.59 261.683 135.096 303.666 153.464L348.755 131.75C340.632 125.627 330.221 119.042 318.275 114.414C264.277 91.2407 199.63 102.774 155.735 148.516C113.513 192.549 100.236 260.254 123.036 318.027C140.069 361.206 112.148 391.748 84.0229 422.575C74.0561 433.503 64.0553 444.431 56 456L183.007 337.677"/></svg><span>Grok Build</span></div>
+    <div id="status" class="busy"><span class="dot"></span><span id="status-text" data-i18n="Starting">Starting</span></div>
+    <button id="btn-settings" data-i18n-title="Settings" title="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
+  </div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="side-top">
+        <svg class="brand-mark grok-mark" viewBox="0 0 512 512" aria-hidden="true" title="Grok Build"><path fill="currentColor" d="M210.484 312.759L343.465 210.383C349.984 205.364 359.302 207.322 362.408 215.117C378.758 256.231 371.454 305.64 338.925 339.563C306.397 373.487 261.137 380.927 219.768 363.983L174.577 385.803C239.394 432.008 318.104 420.581 367.289 369.251C406.303 328.564 418.386 273.104 407.088 223.091L407.19 223.198C390.807 149.726 411.218 120.359 453.03 60.3072C454.02 58.8833 455.01 57.4595 456 56L400.978 113.382V113.204L210.45 312.794"/><path fill="currentColor" d="M183.042 337.641C136.519 291.294 144.54 219.567 184.236 178.203C213.59 147.59 261.683 135.096 303.666 153.464L348.755 131.75C340.632 125.627 330.221 119.042 318.275 114.414C264.277 91.2407 199.63 102.774 155.735 148.516C113.513 192.549 100.236 260.254 123.036 318.027C140.069 361.206 112.148 391.748 84.0229 422.575C74.0561 433.503 64.0553 444.431 56 456L183.007 337.677"/></svg>
+        <span class="grow"></span>
+        <button class="icon-btn" id="btnSearch" data-i18n-title="Search sessions" title="Search sessions">⌕</button>
+      </div>
+      <button class="btn-new" id="btnNew"><span class="plus">⊕</span> <span data-i18n="New chat">New chat</span></button>
+      <div class="search-row" id="searchRow" hidden>
+        <input id="searchInput" type="text" data-i18n-ph="Search sessions…" placeholder="Search sessions…" spellcheck="false">
+      </div>
+      <div class="ws-label" data-i18n="Workspaces">Workspaces</div>
+      <div class="session-list" id="sessionList"></div>
+      <div class="side-foot">
+        <button class="foot-btn" id="btnSettings">⚙ <span data-i18n="Settings">Settings</span></button>
+      </div>
+    </aside>
+
+    <section class="main">
+      <div class="home-view" id="homeView">
+        <div class="home-center" id="homeCenter">
+          <svg class="glyph grok-mark" viewBox="0 0 512 512" aria-hidden="true"><path fill="currentColor" d="M210.484 312.759L343.465 210.383C349.984 205.364 359.302 207.322 362.408 215.117C378.758 256.231 371.454 305.64 338.925 339.563C306.397 373.487 261.137 380.927 219.768 363.983L174.577 385.803C239.394 432.008 318.104 420.581 367.289 369.251C406.303 328.564 418.386 273.104 407.088 223.091L407.19 223.198C390.807 149.726 411.218 120.359 453.03 60.3072C454.02 58.8833 455.01 57.4595 456 56L400.978 113.382V113.204L210.45 312.794"/><path fill="currentColor" d="M183.042 337.641C136.519 291.294 144.54 219.567 184.236 178.203C213.59 147.59 261.683 135.096 303.666 153.464L348.755 131.75C340.632 125.627 330.221 119.042 318.275 114.414C264.277 91.2407 199.63 102.774 155.735 148.516C113.513 192.549 100.236 260.254 123.036 318.027C140.069 361.206 112.148 391.748 84.0229 422.575C74.0561 433.503 64.0553 444.431 56 456L183.007 337.677"/></svg>
+          <!-- JS moves composer here on the home view -->
+        </div>
+      </div>
+
+      <div class="chat-view" id="chatView" hidden>
+        <div class="header">
+          <span class="title" id="headTitle" data-i18n="New chat">New chat</span>
+          <span class="chip" id="headCwd" hidden></span>
+          <span class="model-chip" id="headModel" hidden></span>
+          <span class="spacer"></span>
+          <button class="engine-dot-btn" id="engineBtn" data-i18n-title="Engine & usage" title="Engine & usage"><span class="dot" id="engineDot"></span></button>
+          <button class="icon-btn" id="btnTerminal" data-i18n-title="Open grok TUI in Terminal (resumes this session)" title="Open grok TUI in Terminal (resumes this session)">❯_</button>
+        </div>
+        <div class="transcript" id="transcript">
+          <div class="t-inner" id="tInner"></div>
+        </div>
+      </div>
+
+      <div id="permArea"></div>
+      <div id="bannerArea"></div>
+
+      <!-- /btw side chat: temp ACP session; ↗ promotes to a real session -->
+      <div class="sidechat" id="sideChat" hidden>
+        <div class="sc-head">
+          <span class="t" data-i18n="Side chat">Side chat</span>
+          <span class="grow"></span>
+          <button class="icon-btn" id="scClear" data-i18n-title="Clear" title="Clear">⌫</button>
+          <button class="icon-btn" id="scPromote" data-i18n-title="Open as full session" title="Open as full session">↗</button>
+          <button class="icon-btn" id="scClose" data-i18n-title="Close" title="Close">✕</button>
+        </div>
+        <div class="sc-body" id="scBody"></div>
+        <div class="sc-input">
+          <textarea id="scInput" rows="1" data-i18n-ph="Follow up…" placeholder="Follow up…" spellcheck="false"></textarea>
+          <button class="sc-send" id="scSend" data-i18n-title="Send" title="Send">↑</button>
+        </div>
+      </div>
+
+
+      <div class="composer-wrap" id="composerWrap">
+        <div class="ctx-chips" id="ctxChips">
+          <button class="chip" id="cwdChip" data-i18n-title="Working directory (click to change)" title="Working directory (click to change)">▤ Choose a folder ⌵</button>
+          <button class="chip" id="presetChip" data-i18n-title="Prompt preset (applies to new sessions)" title="Prompt preset (applies to new sessions)">Native prompt ⌵</button>
+        </div>
+        <!-- Turn status: idle dock; tsRender moves it to #tInner while generating -->
+        <div class="turn-status" id="turnStatus" hidden>
+          <span class="ts-spin" id="tsSpin" aria-hidden="true">⠧</span>
+          <span class="ts-label" id="tsLabel"></span>
+          <span class="grow"></span>
+          <span class="ts-turn" id="tsTurn"></span>
+        </div>
+        <div class="composer">
+          <!-- Pasted image thumbs; sent as ACP image blocks -->
+          <div class="attach-row" id="attachRow" hidden></div>
+          <textarea id="input" rows="1" data-i18n-ph="Describe what you want to build…  (/ for commands)" placeholder="Describe what you want to build…  (/ for commands)" spellcheck="false"></textarea>
+          <div class="c-bar">
+            <button class="c-btn" id="permBtn">Ask every time ⌵</button>
+            <span class="grow"></span>
+            <button class="claude-ui-trigger" id="modelBtn"><span class="claude-ui-triggerModel" id="modelLabel" data-i18n="Model">Model</span><span class="claude-ui-triggerEffort" id="effortLabel" data-i18n="Effort">Effort</span><svg class="claude-ui-chevron" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3.5 5.25 7 8.75l3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <!-- Context ring + usage popover -->
+            <button class="ctx-ring-btn" id="usageBtn" title="Context & usage"><svg viewBox="0 0 20 20" aria-hidden="true"><circle class="ring-track" cx="10" cy="10" r="7.5"/><circle class="ring-fill" cx="10" cy="10" r="7.5"/></svg></button>
+            <button class="btn-send" id="btnSend" data-i18n-title="Send" title="Send">↑</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Task panel is a grid column (not overlay) so it does not cover composer -->
+    <aside class="task-panel" id="taskPanel" hidden>
+      <div class="tp-head">
+        <span class="t" data-i18n="Background tasks">Background tasks</span>
+        <button class="icon-btn" id="tpClose" title="Close">✕</button>
+      </div>
+      <div class="tp-body" id="tpBody"></div>
+    </aside>
+  </div>
+
+  <!-- Login overlay when unsigned-in -->
+  <div id="loginView" hidden>
+    <div class="login-drag"></div>
+    <div class="login-box">
+      <svg class="login-mark grok-mark" viewBox="0 0 512 512" aria-hidden="true"><path fill="currentColor" d="M210.484 312.759L343.465 210.383C349.984 205.364 359.302 207.322 362.408 215.117C378.758 256.231 371.454 305.64 338.925 339.563C306.397 373.487 261.137 380.927 219.768 363.983L174.577 385.803C239.394 432.008 318.104 420.581 367.289 369.251C406.303 328.564 418.386 273.104 407.088 223.091L407.19 223.198C390.807 149.726 411.218 120.359 453.03 60.3072C454.02 58.8833 455.01 57.4595 456 56L400.978 113.382V113.204L210.45 312.794"/><path fill="currentColor" d="M183.042 337.641C136.519 291.294 144.54 219.567 184.236 178.203C213.59 147.59 261.683 135.096 303.666 153.464L348.755 131.75C340.632 125.627 330.221 119.042 318.275 114.414C264.277 91.2407 199.63 102.774 155.735 148.516C113.513 192.549 100.236 260.254 123.036 318.027C140.069 361.206 112.148 391.748 84.0229 422.575C74.0561 433.503 64.0553 444.431 56 456L183.007 337.677"/></svg>
+      <div class="login-title">Grok Build</div>
+      <div class="login-sub" data-i18n="Use your xAI account to continue.">Use your xAI account to continue.</div>
+      <button id="loginBtn" class="login-primary" data-i18n="Sign in with xAI">Sign in with xAI</button>
+      <button id="loginContinue" class="login-ghost" data-i18n="I’ve signed in — Continue">I’ve signed in — Continue</button>
+      <div class="login-hint" id="loginHint" data-i18n="Your browser opens to authorize — this app continues automatically.">Your browser opens to authorize — this app continues automatically.</div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <div id="popoverHost"></div>
+  <div id="modalHost"></div>
+
+  <script src="vendor/marked.umd.js"></script>
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

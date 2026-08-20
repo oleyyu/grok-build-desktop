@@ -1,0 +1,2 @@
+# One filename per line. A stacked preset appears when ≥2 valid files are listed.
+

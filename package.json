@@ -1,0 +1,20 @@
+{
+  "name": "grok-build-desktop",
+  "productName": "Grok Build Desktop",
+  "version": "0.1.0",
+  "description": "macOS 桌面端：Grok 原生内核（ACP over stdio）+ Claude 暖色主题 UI",
+  "type": "module",
+  "main": "main/main.js",
+  "private": true,
+  "scripts": {
+    "start": "env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/.bin/electron .",
+    "dev": "env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/.bin/electron . --dev"
+  },
+  "devDependencies": {
+    "electron": "^43.0.0",
+    "marked": "^16.0.0"
+  },
+  "dependencies": {
+    "js-yaml": "^5.3.0"
+  }
+}

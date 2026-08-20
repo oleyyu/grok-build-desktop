@@ -1,0 +1,59 @@
+/* Grok-style tokens. Accent is inverted (black/white); Extra High keeps purple.
+   Theme: data-theme override, else prefers-color-scheme. */
+
+:root {
+  --c-bg-base:#ffffff; --c-bg-layer-1:#fafafa; --c-bg-layer-2:#ffffff; --c-bg-layer-3:#f2f2f2;
+  --c-bg-sidebar:#f7f7f7; --c-bg-bubble:#f1f1f1; --c-bg-input:#ffffff; --c-bg-overlay:#ffffff;
+  --c-border-1:rgba(0,0,0,.07); --c-border-2:rgba(0,0,0,.11);
+  --c-border-3:rgba(0,0,0,.16); --c-border-4:rgba(0,0,0,.22);
+  --c-text-primary:#0d0d0d; --c-text-secondary:#4d4d4d; --c-text-tertiary:#6e6e6e;
+  --c-text-caption:#9a9a9a;
+  --c-brand:#0d0d0d; --c-brand-hover:#333333; --c-on-brand:#ffffff;
+  --c-hover:rgba(0,0,0,.05); --c-active:rgba(0,0,0,.09);
+  --c-hover-accent:rgba(0,0,0,.10); --c-hover-danger:rgba(217,48,37,.08);
+  --c-code-block:#f6f6f6; --c-code-inline:#efefef;
+  --c-danger:#d93025; --c-success:#2e9e5b; --c-warning:#c98a1f;
+  --c-shadow-1:0 2px 4px 0 rgba(0,0,0,.05);
+  --c-shadow-3:0 0 1px rgba(0,0,0,.18),0 0 4px rgba(0,0,0,.03),0 12px 32px rgba(0,0,0,.10);
+  --c-energy:linear-gradient(90deg,#8a74ec,#5546dd); /* Extra High — only chromatic token */
+  /* Usage bars: Claude-blue exception to the mono palette */
+  --c-usage-fill:#3f6ff2; --c-usage-track:#dbe6fc;
+  --c-sidebar-glass: rgba(247,247,247,.9);
+  --c-scrim: rgba(0,0,0,.32);
+  --font-sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Fira Code",Consolas,Menlo,"PingFang SC","Microsoft YaHei",monospace;
+}
+
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --c-bg-base:#101010; --c-bg-layer-1:#161616; --c-bg-layer-2:#1b1b1b; --c-bg-layer-3:#242424;
+  --c-bg-sidebar:#0a0a0a; --c-bg-bubble:#1e1e1e; --c-bg-input:#171717; --c-bg-overlay:#1b1b1b;
+  --c-border-1:rgba(255,255,255,.07); --c-border-2:rgba(255,255,255,.11);
+  --c-border-3:rgba(255,255,255,.16); --c-border-4:rgba(255,255,255,.22);
+  --c-text-primary:#f2f2f2; --c-text-secondary:#b3b3b3; --c-text-tertiary:#8f8f8f;
+  --c-text-caption:#7a7a7a;
+  --c-brand:#f2f2f2; --c-brand-hover:#d9d9d9; --c-on-brand:#0d0d0d;
+  --c-hover:rgba(255,255,255,.07); --c-active:rgba(255,255,255,.13);
+  --c-hover-accent:rgba(255,255,255,.14); --c-hover-danger:rgba(242,99,90,.14);
+  --c-code-block:#161616; --c-code-inline:#242424;
+  --c-danger:#f2635a; --c-success:#4fbf77; --c-warning:#e0aa4e;
+  --c-usage-fill:#6d9aff; --c-usage-track:rgba(120,160,255,.18);
+  --c-sidebar-glass: rgba(10,10,10,.9);
+  --c-scrim: rgba(0,0,0,.55);
+}}
+
+:root[data-theme="dark"] {
+  --c-bg-base:#101010; --c-bg-layer-1:#161616; --c-bg-layer-2:#1b1b1b; --c-bg-layer-3:#242424;
+  --c-bg-sidebar:#0a0a0a; --c-bg-bubble:#1e1e1e; --c-bg-input:#171717; --c-bg-overlay:#1b1b1b;
+  --c-border-1:rgba(255,255,255,.07); --c-border-2:rgba(255,255,255,.11);
+  --c-border-3:rgba(255,255,255,.16); --c-border-4:rgba(255,255,255,.22);
+  --c-text-primary:#f2f2f2; --c-text-secondary:#b3b3b3; --c-text-tertiary:#8f8f8f;
+  --c-text-caption:#7a7a7a;
+  --c-brand:#f2f2f2; --c-brand-hover:#d9d9d9; --c-on-brand:#0d0d0d;
+  --c-hover:rgba(255,255,255,.07); --c-active:rgba(255,255,255,.13);
+  --c-hover-accent:rgba(255,255,255,.14); --c-hover-danger:rgba(242,99,90,.14);
+  --c-code-block:#161616; --c-code-inline:#242424;
+  --c-danger:#f2635a; --c-success:#4fbf77; --c-warning:#e0aa4e;
+  --c-usage-fill:#6d9aff; --c-usage-track:rgba(120,160,255,.18);
+  --c-sidebar-glass: rgba(10,10,10,.9);
+  --c-scrim: rgba(0,0,0,.55);
+}

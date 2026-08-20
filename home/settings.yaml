@@ -1,0 +1,25 @@
+# Grok Build Desktop settings (safe to sync). Secrets live in .credentials.yaml (0600).
+ui:
+  theme: system
+  language: en
+  keepThoughts: false
+  userName: null
+  multiline: false
+  timestamps: false
+  compactMode: false
+engine:
+  model: grok-4.6
+  effort: medium
+  permissionMode: always-approve
+  computerUse: true
+workspace:
+  lastCwd: /Users/oleyyu/Library/CloudStorage/OneDrive-Personal/BIHZCoding/Grok Build Desktop
+profile:
+  fullName: Oley Yu
+  nickname: null
+  work: Product
+  instructions: null
+presets:
+  default: null
+providers:
+  active: null
