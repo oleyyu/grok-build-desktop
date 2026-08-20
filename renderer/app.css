@@ -123,7 +123,7 @@ button, input, textarea, select, a, [role="dialog"] { -webkit-app-region: no-dra
   display: flex; align-items: center; gap: 10px;
   padding: 0 14px 0 20px;
 }
-.header .title { font-weight: 600; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 42%; }
+.header .title { font-weight: 500; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 42%; }
 .chip {
   font-size: 12px; color: var(--c-text-tertiary);
   background: var(--c-hover); border: 1px solid var(--c-border-1);
@@ -132,11 +132,17 @@ button, input, textarea, select, a, [role="dialog"] { -webkit-app-region: no-dra
   cursor: pointer;
 }
 .chip:hover { background: var(--c-active); }
-.model-chip {
-  font-size: 12px; color: var(--c-text-caption);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px;
-}
 .header .spacer { flex: 1; }
+.header .ctx-head {
+  font: 12px/1 ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-caption);
+  padding: 4px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+.header .ctx-head:hover { background: var(--c-hover); color: var(--c-text-primary); }
 .engine-dot-btn { padding: 5px 7px; border-radius: 8px; display: inline-flex; align-items: center; }
 .engine-dot-btn:hover { background: var(--c-hover); }
 .engine-dot-btn .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c-success); }
@@ -466,7 +472,26 @@ body.compact .msg-assistant { line-height: 1.5; }
 }
 .btn-send:hover { background: var(--c-brand-hover); }
 .btn-send:disabled { opacity: .4; cursor: default; }
-.btn-send.stop { background: var(--c-danger); }
+/* 停止态不再用红（黑白主题里太跳，用户拍板）：保持反色圆钮，只换 ■ 字形——grok.com 同款 */
+.btn-send.stop { background: var(--c-brand); }
+
+/* ---------- 排队消息条（grok 原生 prompt 队列） ---------- */
+.queue-row { display: flex; flex-direction: column; gap: 3px; padding: 0 0 8px; }
+.q-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; border-radius: 9px;
+  background: var(--c-hover); border: 1px dashed var(--c-border-2);
+  font-size: 12.5px; color: var(--c-text-secondary);
+}
+.q-pos { flex: none; font-size: 11px; color: var(--c-text-caption); font-variant-numeric: tabular-nums; }
+.q-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.q-btn {
+  flex: none; width: 22px; height: 22px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--c-text-tertiary); font-size: 12px;
+}
+.q-btn:hover { background: var(--c-active); color: var(--c-text-primary); }
+.q-hint { font-size: 11px; color: var(--c-text-caption); padding: 1px 4px 0; }
 
 .popover {
   position: fixed; z-index: 60;
@@ -641,16 +666,18 @@ body.compact .msg-assistant { line-height: 1.5; }
   display: flex;
   flex-direction: column;
 }
-.set-body-usage .ul-sect { margin: 0 0 28px; }
-.set-body-usage .ul-head { margin-bottom: 14px; }
-.set-body-usage .ul-row { margin: 22px 0 10px; }
+.set-body-usage .ul-sect { margin: 0 0 18px; }
+.set-body-usage .ul-head { margin-bottom: 10px; }
+.set-body-usage .ul-row { margin: 8px 0 14px; }
 .set-body-usage .stats-card { padding: 20px 22px 18px; }
 .set-body-usage .ul-main {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: 4px;
+  padding-top: 8px;
   overflow-y: auto;
 }
 .set-row {

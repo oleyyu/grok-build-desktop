@@ -52,8 +52,8 @@
         <div class="header">
           <span class="title" id="headTitle" data-i18n="New chat">New chat</span>
           <span class="chip" id="headCwd" hidden></span>
-          <span class="model-chip" id="headModel" hidden></span>
           <span class="spacer"></span>
+          <button class="ctx-head" id="headCtx" hidden title="Context window"></button>
           <button class="engine-dot-btn" id="engineBtn" data-i18n-title="Engine & usage" title="Engine & usage"><span class="dot" id="engineDot"></span></button>
           <button class="icon-btn" id="btnTerminal" data-i18n-title="Open grok TUI in Terminal (resumes this session)" title="Open grok TUI in Terminal (resumes this session)">❯_</button>
         </div>
@@ -95,6 +95,10 @@
           <span class="ts-turn" id="tsTurn"></span>
         </div>
         <div class="composer">
+          <!-- Queued follow-ups (grok's native prompt queue): Enter while a turn runs
+               queues engine-side; Enter again on an empty box interjects the top row.
+               Rebuilt wholesale from _x.ai/queue/changed broadcasts (server-authoritative). -->
+          <div class="queue-row" id="queueRow" hidden></div>
           <!-- Pasted image thumbs; sent as ACP image blocks -->
           <div class="attach-row" id="attachRow" hidden></div>
           <textarea id="input" rows="1" data-i18n-ph="Describe what you want to build…  (/ for commands)" placeholder="Describe what you want to build…  (/ for commands)" spellcheck="false"></textarea>

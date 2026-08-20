@@ -2,8 +2,7 @@
 // IPC: renderer <-> main. Events go out on evt:* (preload whitelist).
 import { ipcMain, dialog, shell, app } from 'electron'
 import { writeFileSync, mkdirSync, chmodSync } from 'node:fs'
-import { join, isAbsolute, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { listSessions, deleteSession } from './sessions-store.js'
@@ -17,8 +16,7 @@ import { PERMISSION_MODES } from './engine.js'
 import { buildSpawnOpts } from './engine-opts.js'
 import { getAccount, grokLogout, grokLoginStart } from './account.js'
 import * as computerUse from './computer-use.js'
-
-const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url))) // not dataRoot(); GROK_DESKTOP_HOME may move that
+import { readmePath } from './paths.js'
 
 const str = (v) => typeof v === 'string' && v.length > 0
 const optStr = (v) => v == null || typeof v === 'string'
@@ -167,6 +165,20 @@ export function wireIpc({ engine, win, log, settingsRef, onSettingsChanged }) {
   ipcMain.handle('session:cancel', (_e, { sessionId } = {}) => {
     assertShape(str(sessionId), 'session:cancel')
     engine.cancel({ sessionId })
+    return true
+  })
+
+  // Prompt-queue ops on a queued (not-yet-running) message (see engine.queueOp).
+  const okQueueArgs = ({ sessionId, id, expectedVersion }) =>
+    str(sessionId) && str(id) && (expectedVersion == null || typeof expectedVersion === 'number')
+  ipcMain.handle('queue:interject', (_e, args = {}) => {
+    assertShape(okQueueArgs(args), 'queue:interject')
+    engine.queueOp('interject', args)
+    return true
+  })
+  ipcMain.handle('queue:remove', (_e, args = {}) => {
+    assertShape(okQueueArgs(args), 'queue:remove')
+    engine.queueOp('remove', args)
     return true
   })
 
@@ -371,7 +383,7 @@ export function wireIpc({ engine, win, log, settingsRef, onSettingsChanged }) {
     return true
   })
   ipcMain.handle('app:open-readme', async () => {
-    const err = await shell.openPath(join(PROJECT_ROOT, '读我.txt'))
+    const err = await shell.openPath(readmePath())
     if (err) throw new Error(err)
     return true
   })

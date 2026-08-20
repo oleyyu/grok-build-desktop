@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 const INVOKE_CHANNELS = new Set([
   'engine:start', 'engine:stop', 'engine:info',
   'session:new', 'session:load', 'session:prompt', 'session:cancel',
+  'queue:interject', 'queue:remove',
   'session:set-model', 'session:set-effort',
   'permission:respond', 'permission:set-mode',
   'sessions:list', 'sessions:delete',

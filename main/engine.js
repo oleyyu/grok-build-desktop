@@ -9,6 +9,11 @@ import { AcpClient } from './acp-client.js'
 
 export const PERMISSION_MODES = ['ask', 'auto-safe', 'always-approve']
 
+// Queue-entry owner identity. Owner-scoped queue ops (interject/remove) require the
+// entry's owner to equal the request's clientIdentifier, so prompt() and queueOp()
+// must send the same value (probed live: mismatched owner = silent no-op + rebroadcast).
+const CLIENT_ID = 'grok-build-desktop'
+
 export function findGrokBin() {
   const candidates = [
     join(homedir(), '.grok', 'bin', 'grok'),
@@ -181,6 +186,10 @@ export class GrokEngine extends EventEmitter {
     const p = client.request('session/prompt', {
       sessionId,
       prompt: blocks,
+      // clientIdentifier becomes the queue entry's owner (see CLIENT_ID note).
+      // A prompt sent while a turn is running is queued engine-side; its RPC
+      // resolves only when its own turn completes.
+      _meta: { clientIdentifier: CLIENT_ID },
     })
     this.#promptsInFlight.set(sessionId, p)
     try {
@@ -192,6 +201,19 @@ export class GrokEngine extends EventEmitter {
 
   cancel({ sessionId }) {
     this.#require().notify('session/cancel', { sessionId })
+  }
+
+  /** Prompt-queue op (fire-and-forget ext notification). op: interject | remove.
+   *  interject = send-now: on a normal turn the engine cancels the running turn
+   *  (its RPC resolves with stopReason=cancelled) and immediately starts the queued
+   *  prompt as the next turn; during an active goal turn it merges as a mid-turn
+   *  interjection instead. The engine always rebroadcasts _x.ai/queue/changed
+   *  afterwards (no-ops included) — the UI reconciles from that. */
+  queueOp(op, { sessionId, id, expectedVersion }) {
+    if (op !== 'interject' && op !== 'remove') throw new Error(`未知队列操作: ${op}`)
+    this.#require().notify(`_x.ai/queue/${op}`, {
+      sessionId, id, expectedVersion: expectedVersion || 0, clientIdentifier: CLIENT_ID,
+    })
   }
 
   /** Live model switch; throw if unsupported so the caller can restart. */

@@ -65,12 +65,14 @@ const S = {
   active: null,          // {sessionId, cwd, title, items:[], streaming}
   loadingSession: false,
   lastEventBySession: new Map(),
+  queue: null,           // 最近一次 _x.ai/queue/changed 全量：{sid, entries, runningPromptId}
   searchQuery: '',
   statsRange: 'all',
   lastUsage: null,
   lastUsageSid: null,
   ctxAt: 0,
   btwWatch: new Map(),
+  pendingPerms: new Map(), // background sessions' permission requests, replayed on switch-in
 }
 
 const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh']
@@ -99,6 +101,7 @@ function modelDisplay(id) {
 
 function showHome() {
   S.active = null
+  stashLivePerms() // sessions keep running in background; re-shown on switch-in
   $('permArea').innerHTML = ''
   $('homeView').hidden = false
   $('chatView').hidden = true
@@ -106,6 +109,7 @@ function showHome() {
   $('ctxChips').hidden = false
   renderSessionList()
   refreshSendState()
+  renderQueueRow() // 队列条只跟当前会话走；回落地页时藏起来
 }
 function showChat() {
   $('homeView').hidden = true
@@ -493,8 +497,31 @@ function handleUpdate(params) {
     const text = u.content?.text ?? ''
     const pi = u._meta?.promptIndex
     if (S.active.echoAbsorb) {
-      if (pi != null) S.active.echoAbsorb.promptIndex = pi
-      return
+      const ea = S.active.echoAbsorb
+      // 只吸收同一条消息的回显：promptIndex 变了说明是下一条（快速插队时
+      // 上一回合可能一个 agent 事件都没出就被取消，吸收态还挂着——别把新消息吞了）
+      if (pi == null || ea.promptIndex == null || ea.promptIndex === pi) {
+        if (pi != null) ea.promptIndex = pi
+        return
+      }
+      S.active.echoAbsorb = null
+    }
+    // 没被本地回显吸收的 user chunk = 队列 drain / 插队开跑的新回合（或 goal 注入）。
+    // 把生成态钉到新回合上：换代 epoch —— 旧回合 send() 的 finally 从此无权收尾。
+    // session/load 回放（loadingSession）除外；已是队列回合在流式中也不用重复激活。
+    if (!S.loadingSession) {
+      const sid = S.active.sessionId
+      const cur = sendingSessions.get(sid)
+      const queueOwned = cur != null && queueTurnEpochs.has(cur)
+      if (!(queueOwned && S.active.streaming)) {
+        if (queueOwned) queueTurnEpochs.delete(cur)
+        const epoch = ++sendEpoch
+        sendingSessions.set(sid, epoch)
+        queueTurnEpochs.add(epoch)
+        S.active.streaming = true
+        tsBegin(sid)
+        refreshSendState()
+      }
     }
     const last = lastItem()
     if (last?.kind === 'user' && (pi == null || last.promptIndex === pi)) {
@@ -569,9 +596,6 @@ function setChatHeader() {
     chip.textContent = S.active.cwd.split('/').pop() || S.active.cwd
     chip.title = S.active.cwd
   } else chip.hidden = true
-  const mc = $('headModel')
-  mc.hidden = false
-  mc.textContent = S.currentModelId || ''
 }
 
 async function ensureCwd() {
@@ -601,6 +625,7 @@ async function startNewSession(cwdOverride) {
     S.active = { sessionId: r.sessionId, cwd, title: t('New chat'), items: [], streaming: false }
     clearTranscript()
     setChatHeader()
+    renderQueueRow()
     refreshSessionsSoon()
     const al = r?._alignment
     if (al && (!al.modelOk || !al.effortOk)) {
@@ -627,7 +652,10 @@ async function openSession(sess) {
   showChat()
   renderSessionList()
   refreshSendState()
+  renderQueueRow() // 只显示本会话的排队条
+  stashLivePerms() // keep unanswered cards; they re-appear when their session is active
   $('permArea').innerHTML = ''
+  drainPendingPerms(sess.id)
   const loading = el('div', 'info-line', t('Restoring session…'))
   tInner.append(loading)
   try {
@@ -648,7 +676,16 @@ async function openSession(sess) {
   }
 }
 
-let sendingSessionId = null
+// In-flight turns tracked PER SESSION — parallel sessions all working at once
+// (the engine/ACP always supported it; /btw side chat proved it). The old global
+// single lock made "one session generating" block sends in every other session.
+// SEND_PENDING marks a turn whose session isn't created yet (there's only one
+// composer, so at most one of those exists at a time).
+// Map: sessionId -> 回合代际（epoch）。队列 drain 出的新回合会「顶掉」旧回合的代际，
+// 旧回合的 finally 据此失去收尾权（否则它的 tsEnd/解锁会误杀新回合的生成态）。
+const sendingSessions = new Map()
+let sendEpoch = 0
+const queueTurnEpochs = new Set() // 由队列 drain 激活（而非 send() 认领）的代际
 const SEND_PENDING = '__pending__'
 const ATT = { list: [] } // [{mimeType, data(base64), src(dataURI)}]
 const MAX_ATTACHMENTS = 4
@@ -723,8 +760,22 @@ async function send() {
     if (runBuiltinCommand(text)) return
     input.value = text
   }
-  if (sendingSessionId) { toast(t('A turn is still running — wait for it to finish')); return }
-  sendingSessionId = S.active?.sessionId || SEND_PENDING
+  // 只锁「当前这个会话」：别的会话在生成不拦着这里发（多会话并行干活）
+  let lockKey = S.active?.sessionId || SEND_PENDING
+  if (sendingSessions.has(lockKey)) {
+    // 回合进行中再发 → 走 grok 原生 prompt 队列（引擎侧排队，回合结束自动接跑；
+    // TUI 同款：Enter 排队，空输入框再按一次 Enter 对队首插队）
+    if (lockKey === SEND_PENDING) { toast(t('This session is still generating — wait or stop it first')); return }
+    const attachments = ATT.list.map(({ mimeType, data }) => ({ mimeType, data }))
+    ATT.list = []
+    renderAttachRow()
+    input.value = ''
+    autoGrow()
+    queueSend(lockKey, text, attachments)
+    return
+  }
+  const myEpoch = ++sendEpoch
+  sendingSessions.set(lockKey, myEpoch)
   setSendState(true)
   tsBegin(S.active?.sessionId || null)
   input.value = ''
@@ -752,7 +803,12 @@ async function send() {
       const ok = await startNewSession()
       if (!ok) { giveBack(); return }
     }
-    sendingSessionId = S.active.sessionId
+    if (lockKey !== S.active.sessionId) {
+      // 会话刚建出来：占位锁换成真身份（代际随行）
+      sendingSessions.delete(lockKey)
+      lockKey = S.active.sessionId
+      sendingSessions.set(lockKey, myEpoch)
+    }
     TS.sessionId = S.active.sessionId
     S.active.streaming = true
     const attachments = ATT.list.map(({ mimeType, data }) => ({ mimeType, data }))
@@ -808,12 +864,17 @@ async function send() {
     infoLine(`${t('Error')}: ${err.message}`, true)
     giveBack()
   } finally {
-    const owner = sendingSessionId
-    if (S.active && (owner === S.active.sessionId || owner === SEND_PENDING)) S.active.streaming = false
-    sendingSessionId = null
-    finishAllThoughts()
-    tsEnd()
-    setSendState(false)
+    // 代际校验：本回合结束前若队列已 drain 出新回合（epoch 被顶掉），收尾权已易主
+    if (sendingSessions.get(lockKey) === myEpoch) {
+      sendingSessions.delete(lockKey)
+      if (S.active?.sessionId === lockKey) {
+        S.active.streaming = false
+        finishAllThoughts() // 只收自己会话的思考行，别动别的在飞回合
+      }
+      // 状态行是单例、跟着最近一个回合走：还归本回合（或本回合到死都没建出会话）才收
+      if (TS.sessionId === lockKey || (lockKey === SEND_PENDING && TS.sessionId === null)) tsEnd()
+    }
+    refreshSendState() // 发送键/引擎灯按「当前会话是否在生成 + 是否还有在飞回合」重算
     refreshSessionsSoon()
   }
 }
@@ -840,11 +901,99 @@ function setSendState(streaming) {
     btn.title = t('Send')
   }
   const dot = $('engineDot')
-  dot.classList.toggle('busy', streaming)
+  // 引擎灯亮 = 任何会话有在飞回合（不只当前这个）
+  dot.classList.toggle('busy', streaming || sendingSessions.size > 0)
 }
 
 function refreshSendState() {
-  setSendState(!!sendingSessionId && sendingSessionId === S.active?.sessionId)
+  setSendState(!!S.active && sendingSessions.has(S.active.sessionId))
+}
+
+// ---------- 排队与插队（grok 原生 prompt 队列，TUI 同款交互；真机 probe 实锤） ----------
+// 回合进行中 Enter：session/prompt 照发 —— 引擎自己排队并广播 _x.ai/queue/changed，
+// 当前回合结束自动接跑；这条 RPC 要等到它自己的回合完成才回来。
+// 空输入框再按一次 Enter：对队首发 _x.ai/queue/interject（send-now）——
+// 引擎取消当前回合（旧 RPC 以 stopReason=cancelled 收尾，本 UI 对 cancelled 静默）
+// 并立刻用这条消息开新回合，模型马上读到。goal 回合则合并进当前回合，不取消。
+async function queueSend(sessionId, text, attachments) {
+  try {
+    const r = await api('session:prompt', { sessionId, text, attachments })
+    if (r?._meta) {
+      S.lastUsage = r._meta
+      S.lastUsageSid = sessionId
+      S.ctxAt = Date.now()
+      if (typeof r._meta.totalTokens === 'number' && S.active?.sessionId === sessionId) {
+        S.active.ctxTokens = r._meta.totalTokens
+      }
+      updateUsageRing()
+    }
+    if (r?.stopReason && r.stopReason !== 'end_turn' && r.stopReason !== 'cancelled') {
+      turnInfo(sessionId, `${t('Turn ended')}: ${r.stopReason}`)
+    }
+  } catch (err) {
+    turnInfo(sessionId, `${t('Queued message failed')}: ${err.message}`, true)
+  } finally {
+    maybeEndQueuedTurnUI(sessionId)
+    refreshSessionsSoon()
+  }
+}
+
+function queueHasWork(sessionId) {
+  const q = S.queue
+  return !!(q && q.sid === sessionId && (q.runningPromptId || q.entries.length))
+}
+
+// 队列 drain 出来的回合没有 send() 守生命周期，收尾走这里：
+// 生成态确实归队列回合所有（epoch ∈ queueTurnEpochs）且引擎队列已空转才收。
+function maybeEndQueuedTurnUI(sessionId) {
+  const epoch = sendingSessions.get(sessionId)
+  if (epoch == null || !queueTurnEpochs.has(epoch)) return
+  if (queueHasWork(sessionId)) return
+  sendingSessions.delete(sessionId)
+  queueTurnEpochs.delete(epoch)
+  if (S.active?.sessionId === sessionId) {
+    S.active.streaming = false
+    finishAllThoughts()
+  }
+  if (TS.sessionId === sessionId) tsEnd()
+  refreshSendState()
+}
+
+function interjectTop(sessionId) {
+  const q = S.queue
+  if (!q || q.sid !== sessionId || !q.entries.length) return
+  const top = q.entries[0]
+  api('queue:interject', { sessionId, id: top.id, expectedVersion: top.version || 0 })
+    .catch((err) => toast(err.message))
+}
+
+function renderQueueRow() {
+  const host = $('queueRow')
+  const q = S.queue
+  const show = !!(q && q.sid === S.active?.sessionId && q.entries.length)
+  host.hidden = !show
+  host.innerHTML = ''
+  if (!show) return
+  q.entries.forEach((en, i) => {
+    const row = el('div', 'q-item')
+    const txt = el('span', 'q-text', en.text || '')
+    txt.title = en.text || ''
+    const now = el('button', 'q-btn', '↑')
+    now.title = t('Send now (jump the queue)')
+    now.addEventListener('click', () => {
+      api('queue:interject', { sessionId: q.sid, id: en.id, expectedVersion: en.version || 0 })
+        .catch((err) => toast(err.message))
+    })
+    const rm = el('button', 'q-btn', '✕')
+    rm.title = t('Remove from queue')
+    rm.addEventListener('click', () => {
+      api('queue:remove', { sessionId: q.sid, id: en.id, expectedVersion: en.version || 0 })
+        .catch((err) => toast(err.message))
+    })
+    row.append(el('span', 'q-pos', String(i + 1)), txt, now, rm)
+    host.append(row)
+  })
+  host.append(el('div', 'q-hint', t('Queued — runs after this turn. Press Enter on an empty box to send the top one now.')))
 }
 
 const TS_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
@@ -990,8 +1139,9 @@ function tsOnTool(item, u) {
 }
 
 $('btnSend').addEventListener('click', () => {
-  if (sendingSessionId && S.active && sendingSessionId === S.active.sessionId) {
-    tsCancelling()
+  if (S.active && sendingSessions.has(S.active.sessionId)) {
+    // 状态行是单例，可能正被别的会话的回合占着 —— 只有归当前会话才改「停止中」
+    if (TS.sessionId === S.active.sessionId) tsCancelling()
     api('session:cancel', { sessionId: S.active.sessionId }).catch(() => {})
   } else {
     send()
@@ -1004,6 +1154,13 @@ inputEl.addEventListener('keydown', (e) => {
     const swap = !!S.settings?.ui?.multiline
     if (swap ? e.shiftKey : !e.shiftKey) {
       e.preventDefault()
+      // 空输入框 + 本会话生成中 + 有排队 → 二次 Enter 对队首插队（TUI 的 empty-Enter send-now）
+      const sid = S.active?.sessionId
+      if (sid && sendingSessions.has(sid) && !inputEl.value.trim() && !ATT.list.length
+        && S.queue?.sid === sid && S.queue.entries.length) {
+        interjectTop(sid)
+        return
+      }
       send()
     }
   }
@@ -1080,7 +1237,7 @@ const BUILTIN_COMMANDS = [
   { name: 'logout', aliases: [], desc: 'Log out and return to the login screen', kind: 'act' },
   { name: 'import-claude', aliases: [], desc: 'Open the Claude settings import modal', kind: 'tui' },
   { name: 'usage', aliases: ['cost'], desc: 'View usage', kind: 'act' },
-  { name: 'queue', aliases: [], desc: 'List the prompts queued behind the running turn', kind: 'tui' },
+  { name: 'queue', aliases: [], desc: 'List the prompts queued behind the running turn', kind: 'act' },
   { name: 'tasks', aliases: [], desc: 'List background tasks, subagents, and scheduled tasks', kind: 'act' },
   { name: 'release-notes', aliases: ['changelog'], desc: 'View release notes for the current version', kind: 'tui' },
   { name: 'tutorial', aliases: ['tour', 'onboarding'], desc: 'Quick tips to get the most out of Grok Build', kind: 'tui' },
@@ -1361,7 +1518,7 @@ const BUILTIN_ACTIONS = {
   'voice': () => toast(t('Use macOS dictation: focus the input, then press 🎤 (or fn twice)')),
   'clear': async () => {
     const prev = S.active
-    if (prev?.sessionId && sendingSessionId === prev.sessionId) {
+    if (prev?.sessionId && sendingSessions.has(prev.sessionId)) {
       api('session:cancel', { sessionId: prev.sessionId }).catch(() => {})
     }
     const fresh = await startNewSession(prev?.cwd)
@@ -1426,6 +1583,10 @@ const BUILTIN_ACTIONS = {
   'settings': () => openSettings(),
   'privacy': () => openSettings('data'),
   'usage': () => openSettings('usage'),
+  'queue': () => {
+    const n = (S.queue?.sid === S.active?.sessionId ? S.queue?.entries?.length : 0) || 0
+    toast(n ? t('{0} message(s) queued — see the strip above the input', n) : t('The queue is empty'))
+  },
   'login': () => {
     api('account:login-start')
       .then(() => toast(t('Browser opened — finish sign-in there')))
@@ -1834,18 +1995,31 @@ function ctxUsedTokens() {
   return 0
 }
 
+function fmtCtx(n) {
+  return fmtBig(n).replace(/\.0(?=[kM])/, '')
+}
+
 function updateUsageRing() {
   const btn = $('usageBtn')
-  if (!btn) return
   const max = currentModel()?._meta?.totalContextTokens || 0
   const used = ctxUsedTokens()
   const p = max > 0 ? Math.min(1, used / max) : 0
-  btn.style.setProperty('--p', String(p))
-  btn.classList.toggle('warn', p >= 0.7 && p < 0.9)
-  btn.classList.toggle('hot', p >= 0.9)
-  btn.title = max
-    ? `${t('Context window')}: ${fmtBig(used)} / ${fmtBig(max)} (${Math.round(p * 100)}%)`
-    : t('Context & usage')
+  if (btn) {
+    btn.style.setProperty('--p', String(p))
+    btn.classList.toggle('warn', p >= 0.7 && p < 0.9)
+    btn.classList.toggle('hot', p >= 0.9)
+    btn.title = max
+      ? `${t('Context window')}: ${fmtBig(used)} / ${fmtBig(max)} (${Math.round(p * 100)}%)`
+      : t('Context & usage')
+  }
+  const head = $('headCtx')
+  if (head) {
+    head.hidden = !max
+    if (max) {
+      head.textContent = `${fmtCtx(used)}/${fmtCtx(max)}`
+      head.title = `${t('Context window')}: ${fmtBig(used)} / ${fmtBig(max)} (${Math.round(p * 100)}%)`
+    }
+  }
 }
 
 function relAgo(ts) {
@@ -1963,16 +2137,17 @@ function buildUsagePopChildren() {
   return out
 }
 
-$('usageBtn').addEventListener('click', () => {
-  const btn = $('usageBtn')
+function openUsagePop(anchor, { above = false } = {}) {
   const pop = el('div', 'cu-pop')
   const render = () => pop.replaceChildren(...buildUsagePopChildren())
   render()
   Promise.resolve(prefetchUsage(UL.b ? false : true)).then(() => {
-    if (popoverFor === btn && pop.isConnected) render()
+    if (popoverFor === anchor && pop.isConnected) render()
   }).catch(() => {})
-  showPopover(btn, [], { custom: pop, above: true })
-})
+  showPopover(anchor, [], { custom: pop, above })
+}
+$('usageBtn').addEventListener('click', () => openUsagePop($('usageBtn'), { above: true }))
+$('headCtx').addEventListener('click', () => openUsagePop($('headCtx')))
 
 function updateMeta() {
   $('modelLabel').textContent = currentModel() ? modelDisplay(S.currentModelId) : t('Model')
@@ -2095,9 +2270,33 @@ on('evt:permission-request', (req) => {
     return
   }
   if (req.sessionId && S.active?.sessionId && req.sessionId !== S.active.sessionId) {
+    // 后台会话在等权限：暂存，切回那个会话时补弹（多会话并行后这是常态，
+    // 直接丢弃的话那个会话的工具会永久挂起）
+    const q = S.pendingPerms.get(req.sessionId) || []
+    q.push(req)
+    S.pendingPerms.set(req.sessionId, q)
     toast(`${t('Another session is asking for permission')}`)
     return
   }
+  renderPermCard(req)
+})
+// 已弹出但还没答复的权限卡（key -> req）：切会话时收回暂存，切回来补弹
+const livePerms = new Map()
+function stashLivePerms() {
+  for (const req of livePerms.values()) {
+    if (!req.sessionId) continue
+    const q = S.pendingPerms.get(req.sessionId) || []
+    q.push(req)
+    S.pendingPerms.set(req.sessionId, q)
+  }
+  livePerms.clear()
+}
+function drainPendingPerms(sessionId) {
+  for (const req of S.pendingPerms.get(sessionId) || []) renderPermCard(req)
+  S.pendingPerms.delete(sessionId)
+}
+function renderPermCard(req) {
+  livePerms.set(req.key, req)
   const card = el('div', 'perm-card')
   card.dataset.sid = req.sessionId || ''
   card.setAttribute('role', 'dialog')
@@ -2111,6 +2310,7 @@ on('evt:permission-request', (req) => {
     const isAllow = String(o.kind || '').startsWith('allow')
     const b = el('button', 'perm-btn ' + (isAllow ? 'allow' : 'deny'), o.name || o.optionId)
     b.addEventListener('click', () => {
+      livePerms.delete(req.key)
       api('permission:respond', { key: req.key, optionId: o.optionId })
         .then((ok) => { if (!ok) toast(t('This request already expired (the engine restarted)')) })
         .catch((e) => toast(e.message))
@@ -2120,7 +2320,7 @@ on('evt:permission-request', (req) => {
   }
   card.append(opts)
   permArea.append(card)
-})
+}
 
 function setEngineState(running) {
   S.engineRunning = running
@@ -2143,10 +2343,17 @@ on('evt:engine-ready', (init) => {
 })
 
 on('evt:engine-exit', (info) => {
-  if ($('permArea').children.length) {
+  if ($('permArea').children.length || livePerms.size || S.pendingPerms.size) {
     $('permArea').innerHTML = ''
+    livePerms.clear()
+    S.pendingPerms.clear() // waiters died with the engine process
     toast(t('Pending permission requests were cancelled'))
   }
+  // 队列随引擎进程死光：先清本地镜像，随后各挂起 RPC 的 reject 才能把生成态收干净
+  // （queueHasWork 若还看着旧广播，maybeEndQueuedTurnUI 会永远等不到空转）
+  S.queue = null
+  renderQueueRow()
+  queueTurnEpochs.clear()
   if (info?.intentional) return
   setEngineState(false)
   const area = $('bannerArea')
@@ -2178,6 +2385,24 @@ on('evt:engine-notification', ({ method, params }) => {
     updateMeta()
   } else if (method === '_x.ai/sessions/changed') {
     refreshSessionsSoon()
+  } else if (/x\.ai\/queue\/changed$/.test(method)) {
+    // server-authoritative 队列对账：每次全量重建（no-op 操作引擎也会原样重广播）
+    S.queue = {
+      sid: params?.sessionId,
+      entries: params?.entries || [],
+      runningPromptId: params?.runningPromptId || null,
+    }
+    renderQueueRow()
+    if (params?.sessionId) maybeEndQueuedTurnUI(params.sessionId)
+  } else if (/x\.ai\/session\/interjection$/.test(method)) {
+    // goal 回合的同回合注入回显（非 goal 走 cancel+新回合，引擎不发这个广播；
+    // 引擎注明：广播即回显，之后不再发 user_message_chunk）
+    if (params?.sessionId === S.active?.sessionId && params?.text) {
+      const item = newUserItem(null)
+      item.text = params.text
+      item.bodyNode.textContent = params.text
+      scrollDown(false)
+    }
   } else if (/x\.ai\/session_notification$/.test(method)) {
     // {sessionId, update:{sessionUpdate:'workflow_updated', run_id, phases, agents…}}
     const u = params?.update

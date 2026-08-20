@@ -1,7 +1,6 @@
 
 import { app, BrowserWindow, Menu, shell } from 'electron'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { createLogger } from './log.js'
 import { GrokEngine } from './engine.js'
 import { wireIpc } from './ipc.js'
@@ -11,9 +10,9 @@ import { buildSpawnOpts } from './engine-opts.js'
 import { seedPromptsDir } from './presets.js'
 import { maskSecrets } from './mask-secrets.js'
 import { grokLoginCancel } from './account.js'
+import { sourceRoot } from './paths.js'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const PROJECT_ROOT = dirname(__dirname)
+const PROJECT_ROOT = sourceRoot()
 
 delete process.env.ELECTRON_RUN_AS_NODE
 delete process.env.NODE_OPTIONS

@@ -118,6 +118,15 @@ window.I18N = (() => {
     'Cancel': '取消',
     'Model/effort alignment failed — this session runs engine defaults': '模型/档位对齐失败 —— 本会话按引擎默认配置在跑',
     'the engine kept': '引擎仍在用',
+    'This session is still generating — wait or stop it first': '这个会话还在生成 —— 等它跑完或先停止',
+    // ── 排队与插队（grok 原生 prompt 队列） ──
+    'Queued — runs after this turn. Press Enter on an empty box to send the top one now.':
+      '已排队 —— 本回合结束后自动发送。输入框留空再按一次 Enter，队首立即插队。',
+    'Send now (jump the queue)': '立即插队（取消当前回合，马上让模型读到）',
+    'Remove from queue': '移出队列',
+    'Queued message failed': '排队消息发送失败',
+    '{0} message(s) queued — see the strip above the input': '有 {0} 条消息在排队 —— 见输入框上方的队列条',
+    'The queue is empty': '队列是空的',
     'Summarize the session so far': '总结目前的会话',
     'Check this session and show available fixes': '体检本会话并给出修复项',
     'Dictation (TUI: Ctrl+Space/F8)': '语音输入（TUI 里 Ctrl+Space/F8）',

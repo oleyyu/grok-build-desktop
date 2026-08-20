@@ -2,19 +2,64 @@
   "name": "grok-build-desktop",
   "productName": "Grok Build Desktop",
   "version": "0.1.0",
-  "description": "macOS 桌面端：Grok 原生内核（ACP over stdio）+ Claude 暖色主题 UI",
+  "description": "Unofficial macOS desktop app for Grok Build",
+  "author": "Oley Yu",
+  "license": "MIT",
   "type": "module",
   "main": "main/main.js",
   "private": true,
   "scripts": {
     "start": "env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/.bin/electron .",
-    "dev": "env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/.bin/electron . --dev"
+    "dev": "env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/.bin/electron . --dev",
+    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg"
   },
   "devDependencies": {
     "electron": "^43.0.0",
+    "electron-builder": "^26.0.12",
     "marked": "^16.0.0"
   },
   "dependencies": {
     "js-yaml": "^5.3.0"
+  },
+  "build": {
+    "appId": "com.oleyyu.grok-build-desktop",
+    "productName": "Grok Build Desktop",
+    "copyright": "Not affiliated with SpaceXAI / xAI",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main/**/*.js",
+      "renderer/**",
+      "preload.cjs",
+      "package.json",
+      "LICENSE"
+    ],
+    "extraResources": [
+      {
+        "from": "computer-use",
+        "to": "computer-use",
+        "filter": ["**/*", "!selftest.mjs"]
+      },
+      {
+        "from": "读我.txt",
+        "to": "读我.txt"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ],
+      "artifactName": "Grok-Build-Desktop-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "Grok Build Desktop"
+    }
   }
 }

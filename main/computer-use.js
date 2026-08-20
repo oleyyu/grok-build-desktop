@@ -2,15 +2,14 @@
 
 import { spawn, spawnSync, execFile } from 'node:child_process'
 import { existsSync, statSync, mkdirSync, renameSync, rmSync, readFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { promisify } from 'node:util'
+import { computerUseDir } from './paths.js'
 
 const execFileAsync = promisify(execFile)
 
-const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
-export const CU_DIR = join(PROJECT_ROOT, 'computer-use')
+export const CU_DIR = computerUseDir()
 const SERVER_JS = join(CU_DIR, 'server.mjs')
 const SWIFT_SRC = join(CU_DIR, 'input.swift')
 

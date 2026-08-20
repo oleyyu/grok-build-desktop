@@ -20,7 +20,8 @@ This is not an official SpaceXAI or xAI app. It is an independent desktop shell.
 [What you get](#what-you-get) ·
 [Computer use](#computer-use) ·
 [Settings](#settings) ·
-[Thanks](#thanks)
+[Thanks](#thanks) ·
+[License](#license)
 
 ![Home](docs/screenshots/home.jpg)
 
@@ -69,3 +70,7 @@ Add your own prompt files as `.md` in `home/prompts/`. The first `# heading` is 
 ## Thanks
 
 Special thanks to [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) and [Grok Build](https://github.com/xai-org/grok-build) (`grok`, SpaceXAI official) for opening their work on GitHub. This desktop app stands on that movement.
+
+## License
+
+[MIT](LICENSE). Copyright (c) 2026 Oley Yu.

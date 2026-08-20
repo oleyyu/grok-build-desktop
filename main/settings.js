@@ -3,8 +3,9 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync, renameSy
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as yaml from 'js-yaml'
+import { app } from 'electron'
 
-const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+const SOURCE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
 let logSink = { warn: (m) => console.warn(m) }
 export function setSettingsLogger(l) {
@@ -12,7 +13,9 @@ export function setSettingsLogger(l) {
 }
 
 export function dataRoot() {
-  return process.env.GROK_DESKTOP_HOME || join(PROJECT_ROOT, 'home')
+  if (process.env.GROK_DESKTOP_HOME) return process.env.GROK_DESKTOP_HOME
+  if (app.isPackaged) return join(app.getPath('userData'), 'home')
+  return join(SOURCE_ROOT, 'home')
 }
 
 const DEFAULT_SETTINGS = {

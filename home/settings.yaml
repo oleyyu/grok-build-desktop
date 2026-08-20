@@ -1,6 +1,7 @@
-# Grok Build Desktop settings (safe to sync). Secrets live in .credentials.yaml (0600).
+# Grok Build Desktop 设置（本文件可同步/可分享 —— 密钥永远不出现在这里）
+# 密钥放在同目录 .credentials.yaml（0600），这里只引用名字（apiKeyEnv）。
 ui:
-  theme: system
+  theme: dark
   language: en
   keepThoughts: false
   userName: null
