@@ -56,7 +56,11 @@ macOS 桌面端的 Grok Build。内核 100% 是 grok 原生（直接驱动你已
 ----------------
 - home/settings.yaml —— 可同步可截图，密钥只写名字（apiKeyEnv）。
 - home/.credentials.yaml —— 0600，只放密钥值，别放进同步盘、别截图。
-- grok 官方登录态在 ~/.grok/auth.json，跟这个应用无关，我们不碰。
+- grok 当前登录态仍在 ~/.grok/auth.json（引擎只认这一个）。
+  设置 → 账号 可以接入多个 Grok 账号：额度按账号相加显示，
+  当前号用完会自动切到下一个。额外账号的 token 存在
+  ~/Library/Application Support/Grok Build Desktop/.accounts.json（0600），
+  不进 home/、不同步。
 - 日志全部先脱敏再落盘（sk-/xai- 开头的串、Bearer、长 token 都会打码）。
 
 权限模式（设置里）
@@ -93,7 +97,8 @@ macOS 桌面端的 Grok Build。内核 100% 是 grok 原生（直接驱动你已
 1. 白屏/起不来：看日志（设置 → 日志），或在终端跑
    GROK_DESKTOP_DEBUG=1 双击启动器 看输出。
 2. 「grok 引擎进程退出了」横幅：点重启引擎；多半是 grok 登录过期，
-   去 设置 → 账号 点「登录」重新授权（会开浏览器，不弹终端）。
+   去 设置 → 账号 点「添加账号」重新授权（会开浏览器，不弹终端）。
+   两个 SuperGrok 可以都加进来，Plan usage 是合并额度。
 3. 界面卡在「引擎未运行」：确认 ~/.grok/bin/grok 还在、能跑 grok --version。
 
 许可证

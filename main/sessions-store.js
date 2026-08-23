@@ -2,7 +2,7 @@
 // Archive is permanent delete; SESSION_ID_RE is the path-traversal guard.
 
 import { readdir, readFile, stat, rm, realpath } from 'node:fs/promises'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync, openSync, readSync, fstatSync, closeSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -75,4 +75,74 @@ export async function deleteSession({ id, cwd }) {
   if (real !== root && !real.startsWith(root + sep)) throw new Error('目标不在 sessions 根目录内，拒绝删除')
   await rm(real, { recursive: true, force: true })
   return { ok: true }
+}
+
+const TAIL_BYTES = 128 * 1024
+
+function tailUtf8(path, maxBytes = TAIL_BYTES) {
+  let fd
+  try { fd = openSync(path, 'r') } catch { return '' }
+  try {
+    const size = fstatSync(fd).size
+    if (size <= 0) return ''
+    const start = Math.max(0, size - maxBytes)
+    const buf = Buffer.allocUnsafe(size - start)
+    readSync(fd, buf, 0, buf.length, start)
+    let text = buf.toString('utf8')
+    if (start > 0) {
+      const nl = text.indexOf('\n')
+      if (nl !== -1) text = text.slice(nl + 1)
+    }
+    return text
+  } finally {
+    try { closeSync(fd) } catch {}
+  }
+}
+
+function findSessionDir(id, cwd) {
+  if (!SESSION_ID_RE.test(id)) return null
+  if (typeof cwd === 'string' && cwd.startsWith('/')) {
+    const p = join(SESSIONS_ROOT, encodeURIComponent(cwd), id)
+    if (existsSync(p)) return p
+  }
+  let groups
+  try { groups = readdirSync(SESSIONS_ROOT, { withFileTypes: true }) } catch { return null }
+  for (const g of groups) {
+    if (!g.isDirectory()) continue
+    const p = join(SESSIONS_ROOT, g.name, id)
+    if (existsSync(p)) return p
+  }
+  return null
+}
+
+function tokensFromUpdates(sdir) {
+  const text = tailUtf8(join(sdir, 'updates.jsonl'))
+  let context = 0
+  let billed = 0
+  if (!text) return { context, billed }
+  for (const line of text.split('\n')) {
+    if (!line || (!line.includes('totalTokens') && !line.includes('turn_completed'))) continue
+    try {
+      const ev = JSON.parse(line)
+      const tt = ev.params?._meta?.totalTokens
+      if (typeof tt === 'number' && tt > 0) context = tt
+      const u = ev.params?.update
+      if (u?.sessionUpdate === 'turn_completed' && u.usage?.totalTokens > 0) {
+        billed = u.usage.totalTokens
+      }
+    } catch {}
+  }
+  return { context, billed }
+}
+
+/** Live token counts for workflow agents (subagent sessions). Engine tokens_used is 0 until they finish. */
+export function liveAgentTokens({ cwd, agentIds } = {}) {
+  const out = {}
+  if (!Array.isArray(agentIds)) return out
+  const ids = agentIds.filter((id) => typeof id === 'string' && SESSION_ID_RE.test(id)).slice(0, 32)
+  for (const id of ids) {
+    const dir = findSessionDir(id, cwd)
+    out[id] = dir ? tokensFromUpdates(dir) : { context: 0, billed: 0 }
+  }
+  return out
 }

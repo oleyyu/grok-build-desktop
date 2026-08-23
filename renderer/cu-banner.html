@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden;
+    user-select: none; -webkit-user-select: none; cursor: default; }
+  #pill { display: flex; align-items: center; gap: 10px; height: 36px; margin: 6px auto 0;
+    width: max-content; max-width: 700px; padding: 0 18px; border-radius: 18px;
+    background: rgba(18, 18, 22, .93); border: 1px solid rgba(255, 255, 255, .10);
+    box-shadow: 0 2px 16px rgba(0, 0, 0, .38);
+    font: 13px/36px -apple-system, 'SF Pro Text', 'PingFang SC', sans-serif;
+    color: #fff; white-space: nowrap; }
+  #dot { width: 8px; height: 8px; border-radius: 50%; background: #34c759; flex: none;
+    animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .22 } }
+  #hint { color: rgba(255, 255, 255, .52); font-size: 12px; }
+  body.paused #dot { background: #ff9f0a; animation: none; }
+</style>
+</head>
+<body>
+  <div id="pill">
+    <span id="dot"></span>
+    <span id="text">Grok is working on your Mac.</span>
+    <span id="hint"></span>
+  </div>
+<script>
+  window.__setState = function (s) {
+    var zh = s.lang === 'zh'
+    document.body.className = s.paused ? 'paused' : ''
+    // 带上目标 App：选错窗口时用户一眼就看出来（之前只能干等着猜）
+    document.getElementById('text').textContent = s.paused
+      ? (zh ? 'Grok 已暂停 — 回到原桌面即可继续' : 'Grok paused — return to the original desktop to resume')
+      : s.ghost && s.app
+        ? (zh ? 'Grok 正在操作你的 Mac —— ' + s.app : 'Grok is working on your Mac — ' + s.app)
+        : (zh ? 'Grok 正在操作你的 Mac。' : 'Grok is working on your Mac.')
+    document.getElementById('hint').textContent = s.paused
+      ? '⌃← / ⌃→'
+      : s.ghost
+        ? (zh ? '独立指针 · 你的鼠标键盘不受影响' : 'its own pointer · your mouse and keyboard are free')
+        : (zh ? '⌃→ 去你的桌面 · 切走自动暂停' : '⌃→ to your desktop · pauses when you leave')
+  }
+</script>
+</body>
+</html>

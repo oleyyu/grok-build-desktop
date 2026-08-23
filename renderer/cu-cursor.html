@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+  /* height:100% 不能少：body 高度为 0 时，overflow:hidden 会把绝对定位的箭头和标签整个裁掉，
+     元素照样有 getBoundingClientRect，但一个像素都画不出来。 */
+  html, body { height: 100%; margin: 0; background: transparent; overflow: hidden;
+    cursor: default; user-select: none; -webkit-user-select: none; }
+  #wrap { position: relative; width: 100%; height: 100%; }
+  /* Grok 自己的指针：和系统箭头明显不同（紫色描边 + 标签），用户一眼分得清谁在动 */
+  /* 整组内容向右下缩进 14px：波纹以箭头尖为心往四周扩，负坐标会被窗口边界和 overflow 一起
+     裁掉（画出来就只剩半圈）。窗口锚点在 cu-overlay.js 里跟着减掉这 14px。 */
+  svg { position: absolute; top: 14px; left: 14px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.45)); }
+  #tag { position: absolute; left: 34px; top: 36px; padding: 2px 7px; border-radius: 7px;
+    background: #6c4cf1; color: #fff; white-space: nowrap;
+    font: 600 10px/14px -apple-system, 'SF Pro Text', 'PingFang SC', sans-serif;
+    box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  #ring { position: absolute; left: 5px; top: 5px; width: 36px; height: 36px; border-radius: 50%;
+    border: 2px solid #6c4cf1; opacity: 0; }
+  body.click #ring { animation: tap .45s ease-out; }
+  @keyframes tap {
+    0% { opacity: .9; transform: scale(.35) }
+    100% { opacity: 0; transform: scale(1.15) }
+  }
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="ring"></div>
+    <svg width="22" height="24" viewBox="0 0 22 24">
+      <path d="M2 1.5 L2 19 L6.6 14.6 L9.6 21.4 L12.7 20 L9.8 13.4 L16 13.2 Z"
+            fill="#6c4cf1" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>
+    </svg>
+    <div id="tag">Grok</div>
+  </div>
+<script>
+  var t = null
+  window.__cursorPing = function (kind) {
+    if (kind === 'click') {
+      document.body.classList.remove('click')
+      void document.body.offsetWidth
+      document.body.classList.add('click')
+      clearTimeout(t)
+      t = setTimeout(function () { document.body.classList.remove('click') }, 500)
+    }
+  }
+</script>
+</body>
+</html>

@@ -1,6 +1,11 @@
 node_modules/
+# 本机把 node_modules 做成了指向缓存目录的符号链接；带斜杠的规则只匹配目录，
+# 符号链接会漏网被 git add -A 扫进去（推上去对别人是条死链接）
+node_modules
 .DS_Store
 *.log
+# 运行时状态（含本机路径与个人资料），不进仓库；首次运行由 App 生成
+home/settings.yaml
 home/.credentials.yaml
 home/.credentials.yml
 dist/

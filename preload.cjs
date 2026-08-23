@@ -8,17 +8,20 @@ const INVOKE_CHANNELS = new Set([
   'session:set-model', 'session:set-effort',
   'permission:respond', 'permission:set-mode',
   'sessions:list', 'sessions:delete',
+  'workflow:live-tokens', 'workflow:stop',
   'presets:list',
   'settings:get', 'settings:set',
   'credentials:names', 'credentials:set',
   'workspace:pick', 'terminal:open',
   'stats:get',
   'account:get', 'account:logout', 'account:login-start',
+  'account:activate', 'account:remove',
   'account:info-live', 'account:subscription',
   'usage:get', 'usage:topup-rule',
   // computer-use:prewarm is required — settings calls it when enabling Computer Use.
   'computer-use:probe', 'computer-use:prewarm', 'computer-use:open-privacy', 'computer-use:read-shot',
   'app:open-data-dir', 'app:open-logs', 'app:open-readme', 'app:quit', 'app:version',
+  'display:sleep', 'display:stay-awake-status',
 ])
 
 const EVENT_CHANNELS = new Set([
@@ -28,6 +31,7 @@ const EVENT_CHANNELS = new Set([
   'evt:engine-exit',
   'evt:engine-ready',
   'evt:account-login-done',
+  'evt:account-switched',
 ])
 
 contextBridge.exposeInMainWorld('grokDesktop', {

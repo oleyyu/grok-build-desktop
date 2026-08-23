@@ -1,12 +1,14 @@
 // Redact secrets before any log/diagnostic write. Over-mask rather than leak.
 
 // Bearer/Basic must be first in the value alt: otherwise [^\s,;}{]{6,} eats "Bearer" and the token remains.
-const FIELD_NAMES = /("?(?:api[-_]?key|authorization|access[-_]?token|refresh[-_]?token|secret|password|passwd|credential|session[-_]?token|cookie|signature)"?\s*[:=]\s*)((?:Bearer|Basic)\s+\S+|"[^"]{6,}"|'[^']{6,}'|[^\s,;}{]{6,})/gi
+// [a-z0-9]*[-_]?token 兜住 access_token/refresh_token/session_token/id_token/idToken/裸 token 及任意 *token 后缀。
+const FIELD_NAMES = /("?(?:api[-_]?key|authorization|[a-z0-9]*[-_]?token|secret|password|passwd|credential|cookie|signature)"?\s*[:=]\s*)((?:Bearer|Basic)\s+\S+|"[^"]{6,}"|'[^']{6,}'|[^\s,;}{]{6,})/gi
 
 // Already-masked `Bearer ****` must not become `"****"` (would drop the scheme).
 const MASKED_SCHEME = /^(?:Bearer|Basic)\s+\*{4}$/i
 
-const URL_QUERY_SECRETS = /([?&](?:auth|code|credential|key|password|secret|signature|token)[^=&\s]*=)[^&\s]+/gi
+// 关键词允许出现在参数名任意位置（?id_token= 这类前缀形式也要中）。
+const URL_QUERY_SECRETS = /([?&][^=&\s]*(?:auth|code|credential|key|password|secret|signature|token)[^=&\s]*=)[^&\s]+/gi
 
 const BEARER = /\b(Bearer|Basic)\s+[A-Za-z0-9+/=._-]{8,}/g
 

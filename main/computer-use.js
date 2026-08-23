@@ -38,14 +38,36 @@ function resolveNode() {
   return { command: process.execPath, electronAsNode: true }
 }
 
-export function mcpServerEntry() {
+// cu-overlay 的协调口（横幅/暂停/通知）。app ready 后由 main.js 注入；
+// 没注入时 MCP server 独立降级（无横幅，桌面守卫照常）。
+let coordinator = null
+export function setCoordinator(c) { coordinator = c }
+
+export function mcpServerEntry({ lang, ghost = true, hostPids = [] } = {}) {
   const { command, electronAsNode } = resolveNode()
   const env = [
     { name: 'GBD_CU_CACHE', value: CU_CACHE },
+    // 显式置空：selftest 会往环境里塞 GBD_CU_FAKE_SHOT，继承下去 Grok 拿到的就是假截图
     { name: 'GBD_CU_FAKE_SHOT', value: '' },
+    { name: 'GBD_CU_LANG', value: lang === 'zh' ? 'zh' : 'en' },
+    { name: 'GBD_CU_GHOST', value: ghost ? '1' : '0' },
+    // ghost 选目标窗口时排除本应用自己的窗口（主进程 pid 是持有窗口的那个，见 ipc.js hostPids）
+    { name: 'GBD_CU_HOST_PIDS', value: hostPids.filter(Boolean).join(',') },
   ]
+  if (coordinator?.port) {
+    env.push({ name: 'GBD_CU_COORD', value: `http://127.0.0.1:${coordinator.port}` })
+    env.push({ name: 'GBD_CU_COORD_TOKEN', value: coordinator.token })
+  }
   if (electronAsNode) env.push({ name: 'ELECTRON_RUN_AS_NODE', value: '1' })
   return { name: CU_SERVER_NAME, command, args: [SERVER_JS], env }
+}
+
+export function grokConfigAlwaysApprove() {
+  try {
+    const cfg = join(homedir(), '.grok', 'config.toml')
+    if (!existsSync(cfg)) return false
+    return /^\s*permission_mode\s*=\s*["'](always-approve|bypassPermissions|dontAsk)["']/m.test(readFileSync(cfg, 'utf8'))
+  } catch { return false }
 }
 
 function needsCompile() {
@@ -69,9 +91,16 @@ function compileInputBin(log) {
       const done = (ok) => {
         if (settled) return
         settled = true
+        clearTimeout(timer)
         if (!ok) compileFailAt = Date.now()
         resolve(ok)
       }
+      // 编译器卡死会让这个 Promise 永不落地，compileInflight 就永远清不掉（上限同 MCP 侧 180s）
+      const timer = setTimeout(() => {
+        log('computer-use: gbd-input 编译超时（180s），中止')
+        try { p.kill('SIGKILL') } catch {}
+        done(false)
+      }, 180000)
       p.on('exit', (code) => {
         let ok = false
         if (code === 0 && existsSync(tmpOut)) {
@@ -155,13 +184,7 @@ export async function probe() {
   out.screenRecording = shot && existsSync(tmp)
   try { if (existsSync(tmp)) rmSync(tmp, { force: true }) } catch {}
 
-  try {
-    const cfg = join(homedir(), '.grok', 'config.toml')
-    if (existsSync(cfg)) {
-      const txt = readFileSync(cfg, 'utf8')
-      out.grokAlwaysApprove = /^\s*permission_mode\s*=\s*["'](always-approve|bypassPermissions|dontAsk)["']/m.test(txt)
-    }
-  } catch {}
+  out.grokAlwaysApprove = grokConfigAlwaysApprove()
 
   return out
 }

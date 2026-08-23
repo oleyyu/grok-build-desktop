@@ -11,7 +11,7 @@
   "scripts": {
     "start": "env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/.bin/electron .",
     "dev": "env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/.bin/electron . --dev",
-    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg"
+    "dist": "electron-builder --mac dmg"
   },
   "devDependencies": {
     "electron": "^43.0.0",
@@ -40,7 +40,10 @@
       {
         "from": "computer-use",
         "to": "computer-use",
-        "filter": ["**/*", "!selftest.mjs"]
+        "filter": [
+          "**/*",
+          "!selftest.mjs"
+        ]
       },
       {
         "from": "读我.txt",
@@ -50,11 +53,20 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns",
-      "identity": null,
+      "identity": "Lijuan Zhou (7WD5U8V976)",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
+      "extendInfo": {
+        "NSAppSleepDisabled": true
+      },
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "artifactName": "Grok-Build-Desktop-${version}-mac-${arch}.${ext}"
     },

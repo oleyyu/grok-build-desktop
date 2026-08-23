@@ -25,6 +25,10 @@ export class AcpClient extends EventEmitter {
     return !!this.#child && this.#child.exitCode === null && !this.#closed
   }
 
+  get pid() {
+    return this.#child?.pid ?? null
+  }
+
   start() {
     // Strip host Electron env so the grok child is not polluted.
     const env = { ...(this.env || process.env) }
@@ -59,6 +63,9 @@ export class AcpClient extends EventEmitter {
   }
 
   #onData(chunk) {
+    // Pipe-buffered stdout can still arrive after 'exit'/stop(): drop it, or a dead
+    // engine's traffic gets routed while a fresh client is already running.
+    if (this.#closed) return
     this.#buf += chunk
     let idx
     while ((idx = this.#buf.indexOf('\n')) >= 0) {
@@ -77,6 +84,7 @@ export class AcpClient extends EventEmitter {
   }
 
   #dispatch(msg) {
+    if (this.#closed) return // a listener may close us mid-#onData loop
     // Response to our request
     if (msg.id !== undefined && msg.method === undefined) {
       const pend = this.#pending.get(msg.id)
@@ -121,19 +129,27 @@ export class AcpClient extends EventEmitter {
 
   request(method, params, { timeoutMs = 0 } = {}) {
     const id = this.#nextId++
+    let timer = null
     const p = new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject, method })
       if (timeoutMs > 0) {
-        const t = setTimeout(() => {
+        timer = setTimeout(() => {
           if (this.#pending.has(id)) {
             this.#pending.delete(id)
             reject(new Error(`${method} 超时 (${timeoutMs}ms)`))
           }
         }, timeoutMs)
-        t.unref?.()
+        timer.unref?.()
       }
     })
-    this.#write({ jsonrpc: '2.0', id, method, params })
+    try {
+      this.#write({ jsonrpc: '2.0', id, method, params })
+    } catch (err) {
+      // Sync write failure: reap the entry or the timer/#failAll later rejects a promise nobody holds.
+      this.#pending.delete(id)
+      if (timer) clearTimeout(timer)
+      throw err
+    }
     return p
   }
 
@@ -153,6 +169,9 @@ export class AcpClient extends EventEmitter {
     // Close before SIGTERM: between kill and 'exit', alive was true and replies EPIPE'd.
     this.#closed = true
     this.intentionalStop = true
+    // Reject in-flight RPCs now — session/prompt has no timeout, and 'exit' may
+    // never arrive (stuck child) or may fire after the engine has dropped listeners.
+    this.#failAll(new Error('grok 进程已停止'))
     if (!this.#child || this.#child.exitCode !== null) return
     const child = this.#child
     child.kill('SIGTERM')

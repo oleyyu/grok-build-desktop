@@ -1,5 +1,5 @@
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync, renameSync, copyFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync, renameSync, copyFileSync, unlinkSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as yaml from 'js-yaml'
@@ -27,15 +27,21 @@ const DEFAULT_SETTINGS = {
     multiline: false,
     timestamps: false,
     compactMode: false,
+    planUsage: 'separate',      // separate | merged  (multi-account plan limits)
   },
   engine: {
     model: null,
     effort: null,
     permissionMode: 'ask',      // ask | auto-safe | always-approve
     computerUse: false,
+    // 只对共享鼠标模式有意义：独立指针模式下本 App 的窗口一律按 pid 排除，Grok 选不到它
+    cuHideApp: true,            // computer-use 干活时隐藏本 App 并挡出截图（false = 需要 Grok 看见/操作本 App 时用）
+    cuGhost: true,              // 独立指针模式：Grok 用辅助功能操作单个窗口，不碰用户光标（false = 共享真鼠标）
+    keepAwake: true,            // prevent idle system sleep while Grok is generating
   },
   workspace: {
     lastCwd: null,
+    recentCwds: [],
   },
   profile: {
     fullName: null,
@@ -57,6 +63,7 @@ const DEFAULT_SETTINGS = {
 
 const THEMES = ['system', 'light', 'dark']
 const LANGUAGES = ['en', 'zh']
+const PLAN_USAGE = ['separate', 'merged']
 const PERMISSION_MODES = ['ask', 'auto-safe', 'always-approve']
 const EFFORTS = ['low', 'medium', 'high', 'xhigh']
 
@@ -71,9 +78,41 @@ function clampEnums(s) {
   }
   fix(s.ui, 'theme', THEMES, 'system')
   fix(s.ui, 'language', LANGUAGES, 'en')
+  fix(s.ui, 'planUsage', PLAN_USAGE, 'separate')
   fix(s.engine, 'permissionMode', PERMISSION_MODES, 'ask')
   fix(s.engine, 'effort', EFFORTS, null, true)
+  // 这几个开关在使用侧都按 `!== false` / `=== false` 读：yaml 里写成字符串 "false" 反而算开着，
+  // 所以非 boolean 一律拍回默认 true
+  if (s.engine && typeof s.engine.keepAwake !== 'boolean') s.engine.keepAwake = true
+  if (s.engine && typeof s.engine.cuHideApp !== 'boolean') s.engine.cuHideApp = true
+  if (s.engine && typeof s.engine.cuGhost !== 'boolean') s.engine.cuGhost = true
+  if (s.workspace) {
+    const rec = s.workspace.recentCwds
+    if (!Array.isArray(rec)) s.workspace.recentCwds = []
+    else {
+      const seen = new Set()
+      const out = []
+      for (const p of rec) {
+        if (typeof p !== 'string' || !p || seen.has(p)) continue
+        seen.add(p)
+        out.push(p)
+        if (out.length >= 12) break
+      }
+      s.workspace.recentCwds = out
+    }
+  }
   return s
+}
+
+const RECENT_CWD_CAP = 12
+
+export function touchWorkspace(settings, cwd) {
+  if (!settings.workspace) settings.workspace = { lastCwd: null, recentCwds: [] }
+  if (typeof cwd !== 'string' || !cwd) return settings
+  settings.workspace.lastCwd = cwd
+  const rec = Array.isArray(settings.workspace.recentCwds) ? settings.workspace.recentCwds : []
+  settings.workspace.recentCwds = [cwd, ...rec.filter((p) => p !== cwd)].slice(0, RECENT_CWD_CAP)
+  return settings
 }
 
 function deepMerge(base, over) {
@@ -122,8 +161,32 @@ export function saveSettings(settings) {
   return settings
 }
 
+// 明文密钥固定放 userData：dev 模式 dataRoot 在 OneDrive 同步目录里，不能跟着上云。
+// settings.yaml / prompts 仍留在 dataRoot。
+function credentialsFile() {
+  const file = join(app.getPath('userData'), '.credentials.yaml')
+  const legacy = join(dataRoot(), '.credentials.yaml')
+  if (legacy !== file && existsSync(legacy)) {
+    try {
+      // legacy 还在就以它为准：上次 unlink 失败期间的保存都落在 legacy，跳过覆盖会在
+      // 这次 unlink 成功时把新钥匙删掉。仅当 userData 副本更新（OneDrive 复活旧文件）才不覆盖。
+      if (!existsSync(file) || statSync(legacy).mtimeMs >= statSync(file).mtimeMs) {
+        mkdirSync(dirname(file), { recursive: true })
+        // 跨卷（CloudStorage）rename 会 EXDEV，用 copy+unlink
+        copyFileSync(legacy, file)
+        chmodSync(file, 0o600)
+      }
+      unlinkSync(legacy)
+    } catch (e) {
+      logSink.warn(`[settings] .credentials.yaml 迁移失败，仍用旧位置：${e.message}`)
+      return legacy
+    }
+  }
+  return file
+}
+
 export function loadCredentials({ strict = false } = {}) {
-  const file = join(dataRoot(), '.credentials.yaml')
+  const file = credentialsFile()
   if (!existsSync(file)) return {}
   let text = ''
   try {
@@ -156,8 +219,8 @@ export function saveCredential(name, value) {
   if ([...v].some((ch) => ch.charCodeAt(0) < 0x21 || ch.charCodeAt(0) > 0x7e)) {
     throw new Error('密钥含空格或不可见字符（HTTP 头无法携带）')
   }
-  const root = ensureDataRoot()
-  const file = join(root, '.credentials.yaml')
+  ensureDataRoot()
+  const file = credentialsFile()
   const creds = loadCredentials({ strict: true })
   if (existsSync(file)) {
     try { copyFileSync(file, file + '.bak'); chmodSync(file + '.bak', 0o600) } catch {}

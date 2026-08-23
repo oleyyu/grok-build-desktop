@@ -1,4 +1,7 @@
-// Usage stats from ~/.grok/sessions (events.jsonl turns + signals.json). Cached 30s.
+// Usage stats from ~/.grok/sessions. Cached 30s.
+//   events.jsonl  -> turn_started (dates, models, streaks)
+//   signals.json  -> message counts; contextTokensUsed is only a fallback
+//   updates.jsonl -> turn_completed.usage.totalTokens (billed tokens: heatmap, lifetime, peak)
 
 import { readdirSync, readFileSync, existsSync, openSync, readSync, closeSync } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
@@ -55,11 +58,60 @@ function forEachLine(path, onLine) {
   }
 }
 
+function usageDate(ev) {
+  const ms = ev.params?._meta?.agentTimestampMs
+  if (typeof ms === 'number' && Number.isFinite(ms)) return new Date(ms)
+  const ts = ev.timestamp
+  if (typeof ts === 'number' && Number.isFinite(ts)) return new Date(ts > 1e12 ? ts : ts * 1000)
+  if (typeof ts === 'string') {
+    const d = new Date(ts)
+    if (!Number.isNaN(d.getTime())) return d
+  }
+  return null
+}
+
+function addTokensFromUpdates(sdir, tokenByDay) {
+  const updPath = join(sdir, 'updates.jsonl')
+  if (!existsSync(updPath)) return 0
+  const seen = new Set()
+  let billed = 0
+  forEachLine(updPath, (line) => {
+    if (!line.includes('"turn_completed"') || !line.includes('"usage"')) return
+    try {
+      const ev = JSON.parse(line)
+      const u = ev.params?.update
+      if (u?.sessionUpdate !== 'turn_completed') return
+      const tokens = u.usage?.totalTokens
+      if (!(tokens > 0)) return
+      const pid = u.prompt_id
+      if (pid) {
+        if (seen.has(pid)) return
+        seen.add(pid)
+      }
+      const d = usageDate(ev)
+      if (!d || Number.isNaN(d.getTime())) return
+      const day = localDay(d)
+      tokenByDay.set(day, (tokenByDay.get(day) || 0) + tokens)
+      billed += tokens
+    } catch {}
+  })
+  return billed
+}
+
+function sumTokensSince(tokenByDay, sinceDay) {
+  let n = 0
+  for (const [day, tokens] of tokenByDay) {
+    if (sinceDay == null || day >= sinceDay) n += tokens
+  }
+  return n
+}
+
 function scan() {
   const turns = [] // {ts: Date, model, sessionKey}
   const sessions = [] // {key, messages, tokens, model, days:Set, hasSignals}
+  const tokenByDay = new Map()
   let groups = []
-  try { groups = readdirSync(SESSIONS_ROOT, { withFileTypes: true }) } catch { return { turns, sessions } }
+  try { groups = readdirSync(SESSIONS_ROOT, { withFileTypes: true }) } catch { return { turns, sessions, tokenByDay } }
 
   for (const g of groups) {
     if (!g.isDirectory()) continue
@@ -69,9 +121,13 @@ function scan() {
     for (const e of entries) {
       if (!e.isDirectory() || !SESSION_ID_RE.test(e.name)) continue
       const sdir = join(gdir, e.name)
-      // Same hide rule as the sidebar.
-      if (isHiddenSession(sdir)) continue
-      const sess ={ key: e.name, messages: 0, tokens: 0, model: null, days: new Set(), turnCount: 0, hasSignals: false }
+      // Subagents stay off the session list / streak tiles, but their billed
+      // tokens still belong on the Token activity heatmap and lifetime total.
+      if (isHiddenSession(sdir)) {
+        addTokensFromUpdates(sdir, tokenByDay)
+        continue
+      }
+      const sess = { key: e.name, messages: 0, tokens: 0, billed: 0, model: null, days: new Set(), turnCount: 0, hasSignals: false }
 
       const sigPath = join(sdir, 'signals.json')
       if (existsSync(sigPath)) {
@@ -101,11 +157,17 @@ function scan() {
           } catch {}
         })
       }
+
+      const billed = addTokensFromUpdates(sdir, tokenByDay)
+      sess.billed = billed
+      // contextTokensUsed is the live window, not spend — only a fallback for
+      // older sessions that never wrote turn_completed usage.
+      if (billed > 0) sess.tokens = billed
       if (!sess.hasSignals) sess.messages = sess.turnCount * 2 // old sessions: 1 user + 1 assistant per turn
       sessions.push(sess)
     }
   }
-  return { turns, sessions }
+  return { turns, sessions, tokenByDay }
 }
 
 function tilesFor(turns, sessions, sinceMs) {
@@ -152,10 +214,10 @@ function tilesFor(turns, sessions, sinceMs) {
   return {
     sessions: rSessions.length,
     turns: rTurns.length,
-    // messages/tokens are lifetime per session — accurate only for "all";
-    // renderer uses turns for 30d/7d so a whole session is not attributed to the window.
+    // messages are lifetime per session — accurate only for "all".
+    // tokens are filled in getStats() from billed turn_completed usage.
     messages: rSessions.reduce((a, s) => a + s.messages, 0),
-    tokens: rSessions.reduce((a, s) => a + s.tokens, 0),
+    tokens: 0,
     activeDays: days.size,
     currentStreak: current,
     longestStreak: longest,
@@ -166,10 +228,10 @@ function tilesFor(turns, sessions, sinceMs) {
 
 export function getStats() {
   if (cache.data && Date.now() - cache.at < 30000) return cache.data
-  const { turns, sessions } = scan()
+  const { turns, sessions, tokenByDay } = scan()
   const now = Date.now()
 
-  // Heatmap: last 20 weeks of daily turn counts.
+  // Heatmap: last 20 weeks of daily turn counts + billed tokens.
   const dayCount = new Map()
   for (const t of turns) {
     const day = localDay(t.ts)
@@ -181,7 +243,7 @@ export function getStats() {
   for (let i = 0; i < 140; i++) {
     const d = new Date(start.getTime() + i * 86400000)
     const day = localDay(d)
-    heatmap.push({ date: day, count: dayCount.get(day) || 0 })
+    heatmap.push({ date: day, count: dayCount.get(day) || 0, tokens: tokenByDay.get(day) || 0 })
   }
 
   // Account-page year heatmap (364 days); renderer aligns to Monday.
@@ -190,10 +252,10 @@ export function getStats() {
   for (let i = 0; i < 364; i++) {
     const d = new Date(yearStart.getTime() + i * 86400000)
     const day = localDay(d)
-    heatmapYear.push({ date: day, count: dayCount.get(day) || 0 })
+    heatmapYear.push({ date: day, count: dayCount.get(day) || 0, tokens: tokenByDay.get(day) || 0 })
   }
 
-  // Peak tokens in one session + longest span between first and last turn.
+  // Peak billed tokens in one visible session + longest span between first and last turn.
   let peakSessionTokens = 0
   for (const s of sessions) peakSessionTokens = Math.max(peakSessionTokens, s.tokens || 0)
   const span = new Map()
@@ -208,13 +270,22 @@ export function getStats() {
   let longestChatMs = 0
   for (const v of span.values()) longestChatMs = Math.max(longestChatMs, v.max - v.min)
 
+  // Lifetime = billed tokens (heatmap source, including hidden subagents) plus
+  // contextTokensUsed only for sessions that never recorded turn usage.
+  const billedAll = sumTokensSince(tokenByDay, null)
+  const fallback = sessions.reduce((a, s) => a + (s.billed > 0 ? 0 : (s.tokens || 0)), 0)
   const all = tilesFor(turns, sessions, null)
+  all.tokens = billedAll + fallback
+  const d30 = tilesFor(turns, sessions, now - 30 * 86400000)
+  d30.tokens = sumTokensSince(tokenByDay, localDay(new Date(now - 30 * 86400000)))
+  const d7 = tilesFor(turns, sessions, now - 7 * 86400000)
+  d7.tokens = sumTokensSince(tokenByDay, localDay(new Date(now - 7 * 86400000)))
   const data = {
     generatedAt: now,
     ranges: {
       all,
-      d30: tilesFor(turns, sessions, now - 30 * 86400000),
-      d7: tilesFor(turns, sessions, now - 7 * 86400000),
+      d30,
+      d7,
     },
     heatmap,
     heatmapYear,
