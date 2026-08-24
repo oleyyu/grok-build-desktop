@@ -4,5 +4,6 @@
 const { execFileSync } = require('node:child_process')
 
 exports.default = async function stripXattr(context) {
+  console.log('afterPack: stripping xattrs in', context.appOutDir)
   execFileSync('xattr', ['-cr', context.appOutDir], { stdio: 'inherit' })
 }

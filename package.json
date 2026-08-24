@@ -11,7 +11,7 @@
   "scripts": {
     "start": "env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/.bin/electron .",
     "dev": "env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/.bin/electron . --dev",
-    "dist": "electron-builder --mac dmg --publish never"
+    "dist": "node build/dist.mjs"
   },
   "devDependencies": {
     "electron": "^43.0.0",
