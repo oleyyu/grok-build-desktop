@@ -11,7 +11,7 @@
   "scripts": {
     "start": "env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/.bin/electron .",
     "dev": "env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/.bin/electron . --dev",
-    "dist": "electron-builder --mac dmg"
+    "dist": "electron-builder --mac dmg --publish never"
   },
   "devDependencies": {
     "electron": "^43.0.0",
@@ -25,6 +25,7 @@
     "appId": "com.oleyyu.grok-build-desktop",
     "productName": "Grok Build Desktop",
     "copyright": "Not affiliated with SpaceXAI / xAI",
+    "afterPack": "./build/strip-xattr.cjs",
     "directories": {
       "output": "dist",
       "buildResources": "build"
