@@ -12,7 +12,7 @@ import { seedPromptsDir } from './presets.js'
 import { maskSecrets } from './mask-secrets.js'
 import { grokLoginCancel, hydratePool, startAuthWatch, stopAuthWatch, setAccountLogger } from './account.js'
 import { sourceRoot } from './paths.js'
-import { createStayAwake, installBackgroundGuards } from './stay-awake.js'
+import { createStayAwake, installBackgroundGuards, syncRendererThrottle } from './stay-awake.js'
 
 const PROJECT_ROOT = sourceRoot()
 
@@ -42,9 +42,29 @@ engine.on('engine-exit', ({ code, signal, intentional }) => {
   else log.warn(line)
 })
 
+function rendererShouldRunHot() {
+  if (!engine.busy) return false
+  if (stayAwake?.status().displayOffHold) return false
+  if (!win || win.isDestroyed() || !win.isVisible()) return false
+  return true
+}
+function applyRendererEnergy() {
+  const hot = rendererShouldRunHot()
+  syncRendererThrottle(win, hot)
+  if (!win || win.isDestroyed()) return
+  // Drop sidebar vibrancy when the window is not on screen (hidden or
+  // display-off hold). Visible idle chrome keeps the look; WindowServer
+  // does not need to blur a window nobody can see.
+  try {
+    const showFx = win.isVisible() && !stayAwake.status().displayOffHold
+    win.setVibrancy(showFx ? 'sidebar' : null)
+  } catch {}
+}
+
 const stayAwake = createStayAwake({
   log: (m) => log.info(m),
   getBusy: () => engine.busy,
+  onChange: applyRendererEnergy,
 })
 engine.on('busy-change', (busy) => {
   log.info(`stay-awake: engine busy=${busy}`)
@@ -100,7 +120,6 @@ function createWindow() {
       sandbox: true,
       webSecurity: true,
       spellcheck: false,
-      backgroundThrottling: false,
     },
   })
 
@@ -145,8 +164,10 @@ function createWindow() {
       win.hide()
     }
   })
+  win.on('show', applyRendererEnergy)
+  win.on('hide', applyRendererEnergy)
 
-  win.webContents.setBackgroundThrottling(false)
+  applyRendererEnergy()
   win.loadFile(join(PROJECT_ROOT, 'renderer', 'index.html'))
   if (process.argv.includes('--dev')) win.webContents.openDevTools({ mode: 'detach' })
 

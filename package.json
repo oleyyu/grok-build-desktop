@@ -1,7 +1,7 @@
 {
   "name": "grok-build-desktop",
   "productName": "Grok Build Desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Unofficial macOS desktop app for Grok Build",
   "author": "Oley Yu",
   "license": "MIT",
@@ -56,9 +56,6 @@
       "identity": "Lijuan Zhou (7WD5U8V976)",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "extendInfo": {
-        "NSAppSleepDisabled": true
-      },
       "target": [
         {
           "target": "dmg",
@@ -68,10 +65,15 @@
           ]
         }
       ],
-      "artifactName": "Grok-Build-Desktop-${version}-mac-${arch}.${ext}"
+      "artifactName": "Grok-Build-Desktop-${version}-mac-${arch}.${ext}",
+      "electronLanguages": [
+        "en",
+        "zh_CN"
+      ]
     },
     "dmg": {
-      "title": "Grok Build Desktop"
+      "title": "Grok Build Desktop",
+      "format": "ULFO"
     }
   }
 }

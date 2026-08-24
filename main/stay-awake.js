@@ -6,14 +6,22 @@ import { app, powerSaveBlocker, powerMonitor } from 'electron'
 import { spawn, execFile } from 'node:child_process'
 
 export function installBackgroundGuards(app) {
-  // Must run before app.whenReady(). Stops Chromium from freezing the
-  // renderer when the window is hidden, occluded, or the display is off.
-  app.commandLine.appendSwitch('disable-background-timer-throttling')
-  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
-  app.commandLine.appendSwitch('disable-renderer-backgrounding')
+  // Do not disable Chromium background throttling / occluded-window freezing.
+  // Those switches kept the renderer at full clock even while idle in the
+  // background, which is the idle-battery leak. The grok child and main
+  // process keep working; stay-awake holds prevent-app-suspension only
+  // while engine.busy. syncRendererThrottle() unthrottles the page for the
+  // duration of a turn so ask-mode permission cards and stall guards stay live.
+  void app
 }
 
-export function createStayAwake({ log = () => {}, getBusy = () => false } = {}) {
+/** Throttle the renderer unless a turn is in flight AND the window is actually on screen. */
+export function syncRendererThrottle(win, keepLive) {
+  if (!win || win.isDestroyed()) return
+  try { win.webContents.setBackgroundThrottling(!keepLive) } catch {}
+}
+
+export function createStayAwake({ log = () => {}, getBusy = () => false, onChange = () => {} } = {}) {
   let enabled = true
   let blockerId = null
   let cafe = null
@@ -23,7 +31,10 @@ export function createStayAwake({ log = () => {}, getBusy = () => false } = {}) 
   let displayOffQuietUntil = 0
 
   function holding() {
-    return enabled && (!!getBusy() || displayOffHold)
+    // Only block idle sleep while Grok is actually working.
+    // displayOffHold is for renderer/GPU (blanked screen) — it must not
+    // keep caffeinate running after the turn has already ended.
+    return enabled && !!getBusy()
   }
 
   function acquire() {
@@ -74,6 +85,7 @@ export function createStayAwake({ log = () => {}, getBusy = () => false } = {}) 
   function sync() {
     if (holding()) acquire()
     else release()
+    try { onChange() } catch {}
   }
 
   function setEnabled(v) {
@@ -81,6 +93,7 @@ export function createStayAwake({ log = () => {}, getBusy = () => false } = {}) 
     if (!enabled) {
       displayOffHold = false
       release()
+      try { onChange() } catch {}
     } else {
       sync()
     }

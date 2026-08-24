@@ -337,6 +337,26 @@ function currentHeroPhrases(reshuffle) {
   return heroMix
 }
 let heroTyperOn = false
+let heroWake = null
+function heroParked() {
+  return document.hidden || $('homeView').hidden // 不在落地页时挂起，省电也保新鲜感
+}
+function heroWaitUnparked() {
+  if (!heroParked()) return Promise.resolve()
+  return new Promise((resolve) => {
+    const done = () => {
+      if (heroParked()) return
+      document.removeEventListener('visibilitychange', done)
+      if (heroWake === done) heroWake = null
+      resolve()
+    }
+    heroWake = done
+    document.addEventListener('visibilitychange', done)
+  })
+}
+function heroMaybeUnpark() {
+  if (heroWake) heroWake()
+}
 function startHeroTyper() {
   const node = $('heroTyped')
   const line = $('heroLine')
@@ -347,7 +367,6 @@ function startHeroTyper() {
     return
   }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-  const parked = () => document.hidden || $('homeView').hidden // 不在落地页时挂起，省电也保新鲜感
   async function loop() {
     while (true) {
       const phrases = currentHeroPhrases(true)
@@ -356,7 +375,7 @@ function startHeroTyper() {
         const chars = Array.from(t(phrases[i]))
         line.classList.add('typing')
         for (let n = 1; n <= chars.length; n++) {
-          while (parked()) await sleep(400)
+          if (heroParked()) await heroWaitUnparked()
           node.textContent = chars.slice(0, n).join('')
           await sleep(50 + Math.random() * 65)
         }
@@ -364,7 +383,7 @@ function startHeroTyper() {
         await sleep(2500)
         line.classList.add('typing')
         for (let n = chars.length - 1; n >= 0; n--) {
-          while (parked()) await sleep(400)
+          if (heroParked()) await heroWaitUnparked()
           node.textContent = chars.slice(0, n).join('')
           await sleep(26)
         }
@@ -382,6 +401,7 @@ function showHome() {
   stashLivePerms() // sessions keep running in background; re-shown on switch-in
   $('permArea').innerHTML = ''
   $('homeView').hidden = false
+  heroMaybeUnpark()
   $('chatView').hidden = true
   $('homeCenter').append($('composerWrap'))
   $('ctxChips').hidden = false
@@ -1368,6 +1388,7 @@ function setSendState(streaming) {
 function refreshSendState() {
   setSendState(!!S.active && sendingSessions.has(S.active.sessionId))
   tsReconcile()
+  tsBeatSync()
 }
 
 // 状态行（Thinking…/Running…）是单例，靠 tsBegin/tsEnd 显式驱动；而「这个会话还在不在生成」
@@ -1474,10 +1495,9 @@ function renderQueueRow() {
   host.append(el('div', 'q-hint', t('Queued — runs after this turn. Press Enter on an empty box to send the top one now.')))
 }
 
-const TS_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const TS = {
   visible: false, key: null, labelText: '', cls: '',
-  turnStartedAt: 0, timer: null, frame: 0, tokens: 0,
+  turnStartedAt: 0, timer: null, tokens: 0,
   thoughtText: '', thoughtOpen: false,
   runningTools: new Map(), cancelling: false, reCancelArmed: false,
   sessionId: null,
@@ -1493,7 +1513,6 @@ function tsClamp(s) {
 }
 
 const tsEl = $('turnStatus')
-const tsSpinEl = $('tsSpin')
 const tsLabelEl = $('tsLabel')
 const tsTurnEl = $('tsTurn')
 const tsThoughtEl = el('div', 'ts-thought')
@@ -1511,10 +1530,10 @@ function tsRender() {
   if (TS.thoughtOpen && (tsThoughtEl.parentNode !== tInner || tsThoughtEl.nextSibling !== tsEl)) {
     tInner.insertBefore(tsThoughtEl, tsEl)
   }
-  tsSpinEl.textContent = TS_FRAMES[TS.frame % TS_FRAMES.length]
   tsLabelEl.textContent = TS.labelText
-  tsTurnEl.textContent = tsFmtTurn(Date.now() - TS.turnStartedAt)
+  const turnText = tsFmtTurn(Date.now() - TS.turnStartedAt)
     + (TS.tokens > 0 ? ` · ${fmtBig(TS.tokens)} tokens` : '')
+  if (tsTurnEl.textContent !== turnText) tsTurnEl.textContent = turnText
   tsEl.classList.toggle('tool', TS.cls === 'tool')
   tsEl.classList.toggle('cancel', TS.cls === 'cancel')
   const expandable = !!TS.thoughtText && !S.settings?.ui?.keepThoughts
@@ -1542,9 +1561,11 @@ function tsThoughtRender() {
 function tsSet(key, labelText, cls) {
   if (!TS.visible) return
   if (TS.cancelling && cls !== 'cancel') return
+  const nextCls = cls || ''
+  if (TS.key === key && TS.labelText === labelText && TS.cls === nextCls) return
   TS.key = key
   TS.labelText = labelText
-  TS.cls = cls || ''
+  TS.cls = nextCls
   tsRender()
 }
 
@@ -1556,20 +1577,45 @@ function tsBegin(sessionId) {
   TS.runningTools.clear()
   TS.turnStartedAt = Date.now()
   TS.key = null
-  TS.frame = 0
   TS.tokens = 0
   TS.thoughtText = ''
   TS.thoughtOpen = false
   tsThoughtEl.remove()
   tsEl.hidden = false
   tsSet('waiting', t('Waiting for Grok…'))
+  tsArmClock()
+  tsBeatSync()
+}
+
+function tsArmClock() {
   clearInterval(TS.timer)
-  TS.timer = setInterval(() => { TS.frame++; if (TS.visible) tsRender() }, 133)
+  TS.timer = null
+  // Elapsed-seconds text only. The spinner is CSS, so 1 Hz is enough and
+  // avoids a 133ms innerText/layout loop while a turn is running.
+  if (!TS.visible || document.hidden) return
+  TS.timer = setInterval(() => { if (TS.visible) tsRender() }, 1000)
 }
 
 // TS.timer 只在状态行可见时跑，救不了「该显示却没显示」；对账要有个独立心跳兜底，
 // 免得某条新路径忘了调 refreshSendState 就又变成一直没有 Thinking…
-setInterval(tsReconcile, 1000)
+// 闲置时不要 1 Hz 空转：只在有在飞回合或状态行挂着时才拍。
+let tsBeat = null
+function tsBeatWanted() {
+  return !document.hidden && (sendingSessions.size > 0 || TS.visible)
+}
+function tsBeatSync() {
+  if (tsBeatWanted()) {
+    if (!tsBeat) tsBeat = setInterval(tsReconcile, 1000)
+  } else if (tsBeat) {
+    clearInterval(tsBeat)
+    tsBeat = null
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  tsArmClock()
+  tsBeatSync()
+  if (!document.hidden) tsReconcile()
+})
 
 function tsEnd() {
   TS.visible = false
@@ -1579,11 +1625,11 @@ function tsEnd() {
   TS.runningTools.clear()
   clearInterval(TS.timer)
   TS.timer = null
-  TS.frame = 0
   TS.thoughtOpen = false
   tsThoughtEl.remove()
   tsEl.hidden = true
   tsEl.remove()
+  tsBeatSync()
 }
 
 function tsCancelling() {
@@ -3134,6 +3180,7 @@ function wfIngest(u) {
   if (active && !WF.dismissed.has(u.run_id) && !WF.open) wfOpen()
   else wfPullTok()
   wfRender()
+  wfArmTimer()
 }
 // ── 计划栏：模型 plan 渲染到右侧 grid 列（不进对话流），图标是内联 SVG 不用 emoji ──
 const PP_ICONS = {
@@ -3168,15 +3215,29 @@ $('ppClose').addEventListener('click', () => {
   if (S.active) S.active.planClosed = true // 本会话不再自动弹；/view-plan 重新打开
 })
 
+function wfHasLive() {
+  for (const r of WF.runs.values()) {
+    if (r.status === 'active' || r.status === 'paused') return true
+  }
+  return false
+}
+function wfArmTimer() {
+  clearInterval(WF.timer)
+  WF.timer = null
+  if (!WF.open || document.hidden || !wfHasLive()) return
+  WF.timer = setInterval(() => {
+    if (!WF.open || document.hidden || !wfHasLive()) {
+      wfArmTimer()
+      return
+    }
+    wfPullTok()
+    wfTickLive()
+  }, 1000)
+}
 function wfOpen() {
   WF.open = true
   $('taskPanel').hidden = false
-  clearInterval(WF.timer)
-  WF.timer = setInterval(() => {
-    if (!WF.open) return
-    wfPullTok()
-    wfRender()
-  }, 1000)
+  wfArmTimer()
   wfPullTok()
   wfRender()
 }
@@ -3203,16 +3264,22 @@ function wfPullTok() {
     for (const [id, v] of Object.entries(m)) {
       if (v && typeof v === 'object') WF.tok.set(id, v)
     }
-    if (WF.open) wfRender()
+    if (WF.open) wfTickLive()
   }).catch(() => {}).finally(() => { WF.tokBusy = false })
 }
 function wfClose() {
   WF.open = false
   $('taskPanel').hidden = true
-  clearInterval(WF.timer)
-  WF.timer = null
+  wfArmTimer()
   for (const [id, r] of WF.runs) if (r.status === 'active') WF.dismissed.add(id)
 }
+document.addEventListener('visibilitychange', () => {
+  wfArmTimer()
+  if (!document.hidden && WF.open && wfHasLive()) {
+    wfPullTok()
+    wfTickLive()
+  }
+})
 $('tpClose').addEventListener('click', wfClose)
 function wfFmtDur(ms) {
   const s = Math.max(0, Math.floor(ms / 1000))
@@ -3246,6 +3313,27 @@ function wfFmtTok(a) {
   if (n > 0) return fmtBig(n)
   return wfAgentLive(a) ? '—' : '0'
 }
+function wfTickLive() {
+  if (!WF.open || document.hidden) return
+  const body = $('tpBody')
+  if (!body) return
+  for (const r of WF.runs.values()) {
+    const card = body.querySelector(`[data-wf-run="${CSS.escape(r.run_id)}"]`)
+    if (!card) continue
+    const runDur = card.querySelector('[data-wf-dur="run"]')
+    if (runDur) runDur.textContent = wfFmtDur(wfElapsed(r))
+    for (const a of r.agents || []) {
+      const key = a.agent_id || a.label
+      if (!key) continue
+      const row = card.querySelector(`[data-wf-agent="${CSS.escape(key)}"]`)
+      if (!row) continue
+      const tm = row.querySelector('.tm')
+      const tok = row.querySelector('.tok')
+      if (tm) tm.textContent = wfFmtDur(wfAgentDur(a))
+      if (tok) tok.textContent = wfFmtTok(a)
+    }
+  }
+}
 function wfRender() {
   if (!WF.open) return
   const body = $('tpBody')
@@ -3273,6 +3361,7 @@ function wfRender() {
 }
 function wfCard(r, live) {
   const card = el('div', 'tp-card')
+  card.dataset.wfRun = r.run_id
   const h = el('div', 'c-top')
   h.append(el('span', 'name', r.name || r.run_id))
   if (live) {
@@ -3293,7 +3382,12 @@ function wfCard(r, live) {
     h.append(stop)
   }
   card.append(h)
-  card.append(el('div', 'c-sub', `${t('Workflow')}  ${wfFmtDur(wfElapsed(r))}`))
+  const runSub = el('div', 'c-sub')
+  runSub.append(document.createTextNode(`${t('Workflow')}  `))
+  const runDur = el('span', null, wfFmtDur(wfElapsed(r)))
+  runDur.dataset.wfDur = 'run'
+  runSub.append(runDur)
+  card.append(runSub)
   const agents = r.agents || []
   const tok = agents.reduce((a2, x) => a2 + wfTokNum(x), 0)
   const liveUnknownTok = tok === 0 && agents.some(wfAgentLive)
@@ -3329,6 +3423,8 @@ function wfCard(r, live) {
     tbl.append(hd)
     for (const a of agents) {
       const row = el('div', 'a-row' + (a.state === 'running' || a.state === 'active' ? ' live' : ''))
+      const agentKey = a.agent_id || a.label
+      if (agentKey) row.dataset.wfAgent = agentKey
       row.append(el('span', 'chk', (a.state === 'running' || a.state === 'active') ? '' : a.state === 'failed' ? '✗' : '✓'))
       row.append(el('span', 'lbl', a.label || a.agent_id))
       row.append(el('span', 'mdl', a.model || ''))
@@ -4233,11 +4329,31 @@ function applyStaticI18n() {
 }
 
 let loginPoll = null
+let loginPollUntil = 0
+function stopLoginPoll() {
+  clearInterval(loginPoll)
+  loginPoll = null
+  loginPollUntil = 0
+}
+function loginPollTick() {
+  if (document.hidden) return
+  if (loginPollUntil && Date.now() > loginPollUntil) {
+    stopLoginPoll()
+    $('loginHint').textContent = t('Still not signed in — finish the authorization in your browser first')
+    return
+  }
+  api('account:get').then((a) => { if (a?.loggedIn) hideLoginViewAndContinue() }).catch(() => {})
+}
+function armLoginPoll() {
+  if (loginPoll) return
+  if (!loginPollUntil) loginPollUntil = Date.now() + 10 * 60_000
+  loginPoll = setInterval(loginPollTick, 3000)
+}
 function showLoginView() {
   $('loginView').hidden = false
 }
 function hideLoginViewAndContinue() {
-  if (loginPoll) { clearInterval(loginPoll); loginPoll = null }
+  stopLoginPoll()
   $('loginView').hidden = true
   finishBoot()
 }
@@ -4246,16 +4362,21 @@ $('loginBtn').addEventListener('click', () => {
   btn.disabled = true
   api('account:login-start').then(() => {
     $('loginHint').textContent = t('Opened in your browser — finish authorizing there…')
-    if (!loginPoll) {
-      loginPoll = setInterval(async () => {
-        const a = await api('account:get').catch(() => null)
-        if (a?.loggedIn) hideLoginViewAndContinue()
-      }, 3000)
-    }
+    armLoginPoll()
   }).catch((e) => {
     $('loginHint').textContent = `${t('Sign in failed')}: ${e.message}`
-    if (loginPoll) { clearInterval(loginPoll); loginPoll = null }
+    stopLoginPoll()
   }).finally(() => { btn.disabled = false })
+})
+document.addEventListener('visibilitychange', () => {
+  if (!loginPollUntil) return
+  if (document.hidden) {
+    clearInterval(loginPoll)
+    loginPoll = null
+  } else {
+    armLoginPoll()
+    loginPollTick()
+  }
 })
 $('loginContinue').addEventListener('click', async () => {
   const a = await api('account:get').catch(() => null)

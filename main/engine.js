@@ -2,9 +2,11 @@
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { dirname, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { EventEmitter } from 'node:events'
+import { session } from 'electron'
 import { AcpClient } from './acp-client.js'
 
 export const PERMISSION_MODES = ['ask', 'auto-safe', 'always-approve']
@@ -13,6 +15,60 @@ export const PERMISSION_MODES = ['ask', 'auto-safe', 'always-approve']
 // entry's owner to equal the request's clientIdentifier, so prompt() and queueOp()
 // must send the same value (probed live: mismatched owner = silent no-op + rebroadcast).
 const CLIENT_ID = 'grok-build-desktop'
+
+const PROXY_KEYS = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+
+/** macOS 系统代理。scutil 是权威来源，且不依赖 Electron 网络服务何时就绪。 */
+function scutilProxy() {
+  let out
+  try { out = execFileSync('/usr/sbin/scutil', ['--proxy'], { encoding: 'utf8', timeout: 3000 }) }
+  catch { return null }
+  const get = (k) => (new RegExp(`^\\s*${k}\\s*:\\s*(\\S+)`, 'm').exec(out) || [])[1]
+  for (const [en, host, port, scheme] of [
+    ['HTTPSEnable', 'HTTPSProxy', 'HTTPSPort', 'http'],
+    ['HTTPEnable', 'HTTPProxy', 'HTTPPort', 'http'],
+    ['SOCKSEnable', 'SOCKSProxy', 'SOCKSPort', 'socks5'],
+  ]) {
+    if (get(en) !== '1') continue
+    const h = get(host); const pt = get(port)
+    if (h && pt) return `${scheme}://${h}:${pt}`
+  }
+  return null
+}
+
+/**
+ * grok 是 Rust 程序，只认代理环境变量，不读 macOS 系统代理设置。
+ * 从访达/程序坞启动的 App 拿不到 shell 里的 HTTP(S)_PROXY —— grok 于是连不上 x.ai 拉设置，
+ * initialize 一直不返回直到超时（实测：有代理 1.4s 返回，没有则 30s 无响应）。
+ * 这里把系统代理翻成环境变量喂给子进程。每条分支都记日志：上一版在解析失败时静默返回，
+ * 结果线上只看到「超时」，查不出是这里没生效。
+ */
+async function systemProxyEnv(log) {
+  const inherited = PROXY_KEYS.filter((k) => process.env[k])
+  if (inherited.length) { log(`proxy: 沿用环境里的 ${inherited.join(',')}`); return null }
+
+  const sys = scutilProxy()
+  if (sys) {
+    log(`proxy: 取自系统设置 ${sys}`)
+    return { HTTP_PROXY: sys, HTTPS_PROXY: sys, http_proxy: sys, https_proxy: sys,
+      NO_PROXY: process.env.NO_PROXY || 'localhost,127.0.0.1,::1,.local' }
+  }
+
+  // 兜底：Electron 自己的解析（能处理 PAC 脚本）
+  try {
+    const rule = await session.defaultSession.resolveProxy('https://api.x.ai')
+    const first = String(rule || '').split(';')[0].trim()
+    const m = /^(PROXY|HTTPS|SOCKS5?)\s+(\S+)$/i.exec(first)
+    if (!m) { log(`proxy: 系统设置无代理，resolveProxy 返回 ${JSON.stringify(first)} —— 不注入`); return null }
+    const url = (/^SOCKS/i.test(m[1]) ? 'socks5' : 'http') + '://' + m[2]
+    log(`proxy: 取自 resolveProxy ${first} -> ${url}`)
+    return { HTTP_PROXY: url, HTTPS_PROXY: url, http_proxy: url, https_proxy: url,
+      NO_PROXY: process.env.NO_PROXY || 'localhost,127.0.0.1,::1,.local' }
+  } catch (e) {
+    log(`proxy: 解析失败 ${e.message}`)
+    return null
+  }
+}
 
 export function findGrokBin() {
   const candidates = [
@@ -134,7 +190,7 @@ export class GrokEngine extends EventEmitter {
     if (this.spawnOpts.xaiApiBaseUrl) args.push('--xai-api-base-url', this.spawnOpts.xaiApiBaseUrl)
     args.push('stdio')
 
-    const env = { ...process.env, ...(this.spawnOpts.env || {}) }
+    const env = { ...process.env, ...(await systemProxyEnv(this.log) || {}), ...(this.spawnOpts.env || {}) }
 
     this.log(`spawn: ${bin} ${args.join(' ')}`)
     const client = new AcpClient({ binPath: bin, args, env, log: this.log })
@@ -156,6 +212,12 @@ export class GrokEngine extends EventEmitter {
 
     this.client.start()
 
+    // initialize 卡死最常见的原因是 grok 连不上 x.ai（拉远端设置），报错却只有一句超时。
+    // 留一小段 stderr 尾巴，失败时用它把「超时」翻译成人能照着做的话。
+    let tailErr = ''
+    const keepTail = (chunk) => { tailErr = (tailErr + chunk).slice(-4000) }
+    client.on('stderr', keepTail)
+
     let initInfo
     try {
       initInfo = await this.client.request('initialize', {
@@ -170,7 +232,14 @@ export class GrokEngine extends EventEmitter {
         await client.stop().catch(() => {})
         client.removeAllListeners()
       }
+      if (/Settings fetch failed|dns error|connection (refused|timed out)|error sending request/i.test(tailErr)) {
+        throw new Error('grok 连不上 x.ai（stderr: Settings fetch failed）。多半是代理没喂到子进程：'
+          + '从访达/程序坞启动时拿不到终端里的 HTTP(S)_PROXY。检查系统设置里的代理是否开着，'
+          + '或改用「启动 Grok Build.command」启动。')
+      }
       throw err
+    } finally {
+      client.off('stderr', keepTail)
     }
 
     // A stop() / superseding start that landed during the awaits above must win:
