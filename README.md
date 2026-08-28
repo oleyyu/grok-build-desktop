@@ -25,7 +25,7 @@ An independent project, not a SpaceXAI or xAI app.
 
 1. Install and sign in to [Grok Build](https://x.ai/cli) (`grok`) on this Mac.
 2. Download the DMG from [Releases](https://github.com/oleyyu/grok-build-desktop/releases) — Apple silicon or Intel — and drag the app to Applications.
-3. First open: right-click the app → **Open**. It is signed but not notarized, so macOS warns once.
+3. Open the app. Builds are Developer ID-signed and notarized by Apple.
 
 From source: double-click `启动 Grok Build.command`. The first launch downloads the desktop runtime into a local cache.
 

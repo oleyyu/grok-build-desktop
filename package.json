@@ -55,8 +55,10 @@
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns",
       "identity": "Lijuan Zhou (7WD5U8V976)",
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "target": [
         {
           "target": "dmg",
