@@ -7,6 +7,11 @@ const api = (channel, payload) => {
 const on = (channel, cb) => window.grokDesktop && window.grokDesktop.on(channel, cb)
 
 const $ = (id) => document.getElementById(id)
+function setGrokLoad(on) {
+  const n = $('grokLoad')
+  if (!n) return
+  n.hidden = !on
+}
 const el = (tag, cls, text) => {
   const n = document.createElement(tag)
   if (cls) n.className = cls
@@ -1123,24 +1128,22 @@ async function openSession(sess) {
   stashLivePerms() // keep unanswered cards; they re-appear when their session is active
   $('permArea').innerHTML = ''
   drainPendingPerms(sess.id)
-  const loading = el('div', 'info-line', t('Restoring session…'))
-  tInner.append(loading)
+  setGrokLoad(true)
   try {
     await api('session:load', {
       sessionId: sess.id, cwd: sess.cwd,
       presetId: S.settings?.presets?.default || null,
     })
-    loading.remove()
     if (myNav !== navEpoch) return // 视图已易主：别再动人家的转录
     finishAllThoughts()
     scrollDown(true)
   } catch (err) {
-    if (myNav !== navEpoch) { loading.remove(); return }
-    loading.textContent = `${t('Restore failed')}: ${err.message}`
-    loading.classList.add('err')
+    if (myNav !== navEpoch) return
+    infoLine(`${t('Restore failed')}: ${err.message}`, true)
   } finally {
     finishAllThoughts()
     S.loadingSession = false
+    if (myNav === navEpoch) setGrokLoad(false)
     updateUsageRing()
   }
 }
@@ -1226,6 +1229,7 @@ async function restoreActiveSessionBody(sess) {
   if (tookView) {
     S.loadingSession = true
     clearTranscript()
+    setGrokLoad(true)
   }
   try {
     await api('session:load', {
@@ -1242,7 +1246,10 @@ async function restoreActiveSessionBody(sess) {
     toast(`${t('Restore failed')}: ${e.message}`)
     return false
   } finally {
-    if (tookView) S.loadingSession = false
+    if (tookView) {
+      S.loadingSession = false
+      setGrokLoad(false)
+    }
   }
 }
 
@@ -4551,6 +4558,7 @@ function armLoginPoll() {
   loginPoll = setInterval(loginPollTick, 3000)
 }
 function showLoginView() {
+  setGrokLoad(false)
   $('loginView').hidden = false
 }
 function hideLoginViewAndContinue() {
@@ -4698,6 +4706,8 @@ async function finishBoot() {
   sessionStorage.removeItem('gbd:lastSession')
   if (last?.id && last?.cwd) {
     await openSession({ id: last.id, cwd: last.cwd, title: last.title }).catch(() => {})
+  } else {
+    setGrokLoad(false)
   }
   inputEl.focus()
 }

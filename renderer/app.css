@@ -104,16 +104,16 @@ button, input, textarea, select, a, [role="dialog"] { -webkit-app-region: no-dra
   box-sizing: border-box;
   flex: none;
   width: 12px; height: 12px;
-  border: 1.6px solid var(--c-text-caption);
-  border-right-color: transparent;
+  border: 1.2px solid color-mix(in srgb, var(--c-text-primary) 22%, transparent);
+  border-top-color: var(--c-text-primary);
   border-radius: 50%;
-  animation: sess-spin .7s linear infinite;
+  animation: sess-spin .9s linear infinite;
 }
 .sess.working .sess-spin { display: block; }
 .sess.working .when { display: none; }
 @keyframes sess-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .sess .sess-spin { animation: none; border-right-color: var(--c-text-caption); opacity: .55; }
+  .sess .sess-spin { animation: none; border-top-color: var(--c-text-caption); opacity: .55; }
 }
 
 .side-foot { border-top: 1px solid var(--c-border-1); padding: 8px 10px; }
@@ -469,14 +469,14 @@ body.compact .msg-assistant { line-height: 1.5; }
 .turn-status .ts-spin {
   box-sizing: border-box;
   width: 12px; height: 12px;
-  border: 1.6px solid var(--c-text-caption);
-  border-right-color: transparent;
+  border: 1.2px solid color-mix(in srgb, var(--c-text-primary) 22%, transparent);
+  border-top-color: var(--c-text-primary);
   border-radius: 50%;
-  animation: sess-spin .7s linear infinite;
+  animation: sess-spin .9s linear infinite;
   flex: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .turn-status .ts-spin { animation: none; border-right-color: var(--c-text-caption); opacity: .55; }
+  .turn-status .ts-spin { animation: none; border-top-color: var(--c-text-caption); opacity: .55; }
 }
 .turn-status .ts-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .turn-status .ts-turn {
@@ -491,7 +491,10 @@ body.compact .msg-assistant { line-height: 1.5; }
 }
 .turn-status.tool .ts-label { color: var(--c-success); }
 .turn-status.cancel .ts-label { color: var(--c-danger); }
-.turn-status.cancel .ts-spin { border-color: var(--c-danger); border-right-color: transparent; }
+.turn-status.cancel .ts-spin {
+  border-color: color-mix(in srgb, var(--c-danger) 28%, transparent);
+  border-top-color: var(--c-danger);
+}
 
 .composer {
   max-width: 680px; margin: 0 auto;
@@ -870,6 +873,50 @@ body.compact .msg-assistant { line-height: 1.5; }
   pointer-events: none;
 }
 .toast.show { opacity: 1; }
+
+/* Grok-style boot / restore loader: official mark inside a thin arc. */
+#grokLoad {
+  position: fixed; top: 40px; left: 0; right: 0; bottom: 0;
+  z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--c-bg-base);
+  pointer-events: none;
+}
+.grok-load-orb {
+  position: relative;
+  width: 92px; height: 92px;
+}
+.grok-load-ring {
+  position: absolute; inset: 0;
+  animation: grok-load-spin 1.05s linear infinite;
+}
+.grok-load-ring .track,
+.grok-load-ring .arc {
+  fill: none;
+  stroke-width: 1.4;
+}
+.grok-load-ring .track { stroke: var(--c-border-2); }
+.grok-load-ring .arc {
+  stroke: var(--c-text-primary);
+  stroke-linecap: round;
+  stroke-dasharray: 58 226;
+}
+.grok-load-mark {
+  position: absolute;
+  width: 30px; height: 30px;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--c-text-primary);
+  animation: grok-load-breathe 2.4s ease-in-out infinite;
+}
+@keyframes grok-load-spin { to { transform: rotate(360deg); } }
+@keyframes grok-load-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .grok-load-ring, .grok-load-mark { animation: none; }
+}
 
 svg.brand-mark { width: 20px; height: 20px; color: var(--c-text-primary); flex: none; }
 .home-hero svg.glyph { width: 32px; height: 32px; }
