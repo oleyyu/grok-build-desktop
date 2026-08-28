@@ -115,6 +115,9 @@ export class GrokEngine extends EventEmitter {
   #promptsInFlight = new Set() // { sessionId, settle } — 同会话排队的多条 prompt 各占一条
   #cancelTimers = new Map() // sessionId -> timeout[]
   #busyFlag = false
+  #lingerBusy = new Set() // prompt RPCs still in flight after a local cancel gate
+  #abortExtra = null // passed through #stopClient → #abortSessionPrompts (account switch)
+  #loadedSessions = new Set() // sessionIds that session/new or session/load succeeded on this process
 
   constructor({ log }) {
     super()
@@ -124,7 +127,7 @@ export class GrokEngine extends EventEmitter {
   get running() { return !!this.client?.alive && !!this.initInfo }
 
   get busy() {
-    return this.#promptsInFlight.size > 0 || this.#permissionWaiters.size > 0
+    return this.#promptsInFlight.size > 0 || this.#permissionWaiters.size > 0 || this.#lingerBusy.size > 0
   }
 
   get childPid() { return this.client?.pid ?? null }
@@ -254,19 +257,24 @@ export class GrokEngine extends EventEmitter {
     return this.initInfo
   }
 
-  async stop() {
+  async stop(opts = {}) {
     // Set before kill so the old process exit is marked intentional.
     this.#intentionalStop = true
     this.#stopEpoch++
-    // Wait out an in-flight start (best-effort) so its client can't escape this stop;
-    // stopping the current client first makes a pending initialize fail fast.
-    while (this.#startingPromise) {
+    this.#abortExtra = opts.abortExtra || null
+    try {
+      // Wait out an in-flight start (best-effort) so its client can't escape this stop;
+      // stopping the current client first makes a pending initialize fail fast.
+      while (this.#startingPromise) {
+        await this.#stopClient()
+        await this.#startingPromise.catch(() => {})
+      }
       await this.#stopClient()
-      await this.#startingPromise.catch(() => {})
+      this.initInfo = null
+      for (const sid of [...this.#cancelTimers.keys()]) this.#clearCancelWatchdog(sid)
+    } finally {
+      this.#abortExtra = null
     }
-    await this.#stopClient()
-    this.initInfo = null
-    for (const sid of [...this.#cancelTimers.keys()]) this.#clearCancelWatchdog(sid)
   }
 
   /** Internal: stop only the current client. #doStart uses this — the public stop() would await #startingPromise, i.e. itself. */
@@ -281,7 +289,8 @@ export class GrokEngine extends EventEmitter {
     // AcpClient.stop() failAlls the old RPCs; each prompt() finally drops only
     // its own identity. Clearing the set after await would delete a new client's
     // in-flight prompts. Settle local cancel gates so a hung race unblocks.
-    this.#abortSessionPrompts()
+    this.#abortSessionPrompts(undefined, this.#abortExtra || {})
+    this.#loadedSessions.clear()
     for (const { resolve } of this.#permissionWaiters.values()) {
       resolve({ outcome: { outcome: 'cancelled' } })
     }
@@ -304,9 +313,16 @@ export class GrokEngine extends EventEmitter {
   async restart({ resumeSessionId, resumeCwd, resumeMcpServers, resumeMeta, ...opts } = {}) {
     await this.start(opts)
     if (resumeSessionId && resumeCwd) {
-      return await this.loadSession({
-        sessionId: resumeSessionId, cwd: resumeCwd, meta: resumeMeta, mcpServers: resumeMcpServers,
-      })
+      try {
+        return await this.loadSession({
+          sessionId: resumeSessionId, cwd: resumeCwd, meta: resumeMeta, mcpServers: resumeMcpServers,
+        })
+      } catch (err) {
+        // start() already emitted engine-ready; leave the process up so the
+        // caller / renderer can session/load. Do not pretend the session is live.
+        this.log(`restart 后 session/load 失败，进程已起来但会话未加载: ${err.message}`)
+        throw err
+      }
     }
     return null
   }
@@ -322,17 +338,22 @@ export class GrokEngine extends EventEmitter {
     if (!cwd || !isAbsolute(cwd)) throw new Error('cwd 必须是绝对路径')
     const params = { cwd, mcpServers: mcpServers || [] }
     if (meta && Object.keys(meta).length) params._meta = meta
-    return await this.#require().request('session/new', params, { timeoutMs: 60000 })
+    const result = await this.#require().request('session/new', params, { timeoutMs: 60000 })
+    if (result?.sessionId) this.#loadedSessions.add(result.sessionId)
+    return result
   }
 
   async loadSession({ sessionId, cwd, meta, mcpServers }) {
     const params = { sessionId, cwd, mcpServers: mcpServers || [] }
     if (meta && Object.keys(meta).length) params._meta = meta
-    return await this.#require().request('session/load', params, { timeoutMs: 120000 })
+    const result = await this.#require().request('session/load', params, { timeoutMs: 120000 })
+    this.#loadedSessions.add(sessionId)
+    return result
   }
 
   async prompt({ sessionId, text, attachments }) {
     const client = this.#require()
+    if (!this.#loadedSessions.has(sessionId)) throw new Error('SESSION_NOT_LOADED')
     const blocks = []
     if (text) blocks.push({ type: 'text', text })
     for (const a of attachments || []) {
@@ -354,10 +375,26 @@ export class GrokEngine extends EventEmitter {
     const rec = { sessionId, settle }
     this.#promptsInFlight.add(rec)
     this.#syncBusy()
+    let gateWon = false
+    const gated = gate.then((v) => { gateWon = true; return v })
     try {
-      return await Promise.race([p, gate])
+      const result = await Promise.race([p, gated])
+      if (result?._accountSwitch) {
+        throw new Error(`ACCOUNT_SWITCHED:${result._switchedTo || ''}`)
+      }
+      return result
     } finally {
       this.#promptsInFlight.delete(rec)
+      if (gateWon) {
+        // Local cancel settled the UI, but session/prompt (no timeout) may still
+        // be running in grok. Keep busy/stay-awake until that RPC actually ends.
+        this.#lingerBusy.add(p)
+        this.#syncBusy()
+        p.finally(() => {
+          this.#lingerBusy.delete(p)
+          this.#syncBusy()
+        })
+      }
       if (![...this.#promptsInFlight].some((r) => r.sessionId === sessionId)) {
         this.#clearCancelWatchdog(sessionId)
       }
@@ -430,6 +467,30 @@ export class GrokEngine extends EventEmitter {
     this.#cancelPermissions(sessionId)
     this.#armCancelWatchdog(sessionId)
     if (!ok) this.#abortSessionPrompts(sessionId, { _localAbort: true })
+  }
+
+  /** Stop ACP work on a session we are about to rm from disk. */
+  async dropSession({ sessionId }) {
+    if (!sessionId) return
+    this.cancel({ sessionId })
+    this.#abortSessionPrompts(sessionId, { _dropped: true, stopReason: 'cancelled' })
+    this.#loadedSessions.delete(sessionId)
+    if (!this.running) return
+    const attempts = [
+      ['session/close', { sessionId }],
+      ['session/unload', { sessionId }],
+      ['_x.ai/session/close', { sessionId }],
+    ]
+    for (const [method, params] of attempts) {
+      try {
+        await this.#require().request(method, params, { timeoutMs: 4000 })
+        return
+      } catch (err) {
+        if (!/method not found|引擎未运行/i.test(err.message)) {
+          this.log(`dropSession ${method}: ${err.message}`)
+        }
+      }
+    }
   }
 
   async stopWorkflow({ sessionId, runId, name, agentIds } = {}) {

@@ -8,7 +8,7 @@ import {
 import { join, dirname } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { execFile, spawn } from 'node:child_process'
-import { app } from 'electron'
+import { app, net } from 'electron'
 import { AcpClient } from './acp-client.js'
 
 export const AUTH_FILE = join(homedir(), '.grok', 'auth.json')
@@ -25,6 +25,9 @@ const MAX_ACCOUNTS = 8
 const USAGE_STALE_MS = 5 * 60e3
 const EXHAUSTED_PCT = 99.5
 const AUTH_WATCH_DEBOUNCE_MS = 400
+const BILLING_HTTP = 'https://cli-chat-proxy.grok.com/v1/billing?format=credits'
+const TOPUP_HTTP = 'https://cli-chat-proxy.grok.com/v1/auto-topup-rule'
+const BILLING_HTTP_TIMEOUT_MS = 8000
 
 let logSink = { info: () => {}, warn: (m) => console.warn(m) }
 export function setAccountLogger(l) {
@@ -343,30 +346,37 @@ export function isUsageLimitError(err) {
   return /credit limit|usage limit|usage_pool_exhausted|usage_limit_reached|spending cap|hit the rate limit for your plan|you've hit the credit|you’ve hit the credit|free grok build usage limit/.test(blob)
 }
 
+function applyBillingToAccount(a, billing) {
+  const cfg = billing.config || {}
+  const prev = a.usage || {}
+  const frac = usageFraction(billing)
+  const percent = frac != null ? frac * 100
+    : (typeof cfg.creditUsagePercent === 'number' ? cfg.creditUsagePercent : prev.percent ?? null)
+  const period = cfg.currentPeriod || {}
+  const odFlag = billing.on_demand_enabled ?? billing.onDemandEnabled
+  a.usage = {
+    percent,
+    used: cfg.used?.val ?? prev.used ?? null,
+    limit: cfg.monthlyLimit?.val ?? prev.limit ?? null,
+    periodEnd: period.end || cfg.billingPeriodEnd || prev.periodEnd || null,
+    periodType: period.type || prev.periodType || null,
+    tier: billing.subscription_tier || billing.subscriptionTier || prev.tier || null,
+    fetchedAt: Date.now(),
+    onDemandCap: cfg.onDemandCap?.val ?? prev.onDemandCap ?? null,
+    onDemandUsed: cfg.onDemandUsed?.val ?? prev.onDemandUsed ?? null,
+    prepaid: cfg.prepaidBalance?.val ?? prev.prepaid ?? null,
+    onDemandEnabled: odFlag != null ? !!odFlag : !!prev.onDemandEnabled,
+  }
+  a.exhausted = percent != null && percent >= EXHAUSTED_PCT
+  a.exhaustedAt = a.exhausted ? Date.now() : null
+}
+
 export function recordUsage(id, billing) {
   if (!id || !billing) return
   const pool = loadPool()
   const a = pool.accounts[id]
   if (!a) return
-  const cfg = billing.config || {}
-  const frac = usageFraction(billing)
-  const percent = frac != null ? frac * 100 : (typeof cfg.creditUsagePercent === 'number' ? cfg.creditUsagePercent : null)
-  const period = cfg.currentPeriod || {}
-  a.usage = {
-    percent,
-    used: cfg.used?.val ?? null,
-    limit: cfg.monthlyLimit?.val ?? null,
-    periodEnd: period.end || cfg.billingPeriodEnd || null,
-    periodType: period.type || null,
-    tier: billing.subscription_tier || billing.subscriptionTier || null,
-    fetchedAt: Date.now(),
-    onDemandCap: cfg.onDemandCap?.val ?? null,
-    onDemandUsed: cfg.onDemandUsed?.val ?? null,
-    prepaid: cfg.prepaidBalance?.val ?? null,
-    onDemandEnabled: !!(billing.on_demand_enabled ?? billing.onDemandEnabled),
-  }
-  a.exhausted = percent != null && percent >= EXHAUSTED_PCT
-  a.exhaustedAt = a.exhausted ? Date.now() : null
+  applyBillingToAccount(a, billing)
   savePool(pool)
 }
 
@@ -492,9 +502,69 @@ export function mergePoolBilling(live, liveId) {
   }
 }
 
-/** Short-lived grok agent under a temp GROK_HOME so we can read another account's billing. */
+function bearerFromAuth(authObj) {
+  if (!authObj || typeof authObj !== 'object') return null
+  for (const v of Object.values(authObj)) {
+    if (v && typeof v === 'object' && typeof v.key === 'string' && v.key.length > 20) return v.key
+  }
+  return null
+}
+
+async function grokProxyGet(url, token, timeoutMs = BILLING_HTTP_TIMEOUT_MS) {
+  if (!token) throw new Error('没有可查询的凭证')
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/json',
+  }
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    const fetchFn = typeof net?.fetch === 'function' ? net.fetch.bind(net) : fetch
+    const res = await fetchFn(url, { method: 'GET', headers, signal: ctrl.signal })
+    if (!res.ok) {
+      const err = new Error(`HTTP ${res.status}`)
+      err.status = res.status
+      throw err
+    }
+    return await res.json()
+  } catch (e) {
+    if (e?.name === 'AbortError') throw new Error(`HTTP 超时 (${timeoutMs}ms)`)
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export function getActiveAuth() {
+  syncActiveFromDisk()
+  const pool = loadPool()
+  if (pool.activeId && pool.accounts[pool.activeId]?.auth) return pool.accounts[pool.activeId].auth
+  return readAuthFile()
+}
+
+export async function fetchBillingDirect(authObj, { timeoutMs = BILLING_HTTP_TIMEOUT_MS } = {}) {
+  const billing = await grokProxyGet(BILLING_HTTP, bearerFromAuth(authObj), timeoutMs)
+  if (!billing || typeof billing !== 'object') throw new Error('billing 响应无效')
+  return billing
+}
+
+export async function fetchAutoTopupDirect(authObj, { timeoutMs = BILLING_HTTP_TIMEOUT_MS } = {}) {
+  const raw = await grokProxyGet(TOPUP_HTTP, bearerFromAuth(authObj), timeoutMs)
+  if (!raw || typeof raw !== 'object') return { rule: null }
+  if (raw.rule && typeof raw.rule === 'object') return { rule: raw.rule }
+  if (raw.enabled != null) return { rule: raw }
+  return { rule: null }
+}
+
+/** Prefer the billing HTTP API. Spawn a temp grok agent only if that fails (expired token, etc.). */
 export async function probeBilling(authObj, { timeoutMs = 20000 } = {}) {
   if (!authObj) throw new Error('没有可查询的凭证')
+  try {
+    const billing = await fetchBillingDirect(authObj, { timeoutMs: Math.min(BILLING_HTTP_TIMEOUT_MS, timeoutMs) })
+    return { billing, auth: authObj }
+  } catch (e) {
+    logSink.warn?.(`[account] HTTP billing failed, grok fallback: ${e.message}`)
+  }
   const bin = grokBin()
   if (!existsSync(bin)) throw new Error('找不到 grok 可执行文件')
   const tmp = mkdtempSync(join(tmpdir(), 'gbd-acct-'))
@@ -535,40 +605,33 @@ export async function probeBilling(authObj, { timeoutMs = 20000 } = {}) {
 export async function refreshInactiveUsage({ liveId, log } = {}) {
   const pool = loadPool()
   const now = Date.now()
-  let changed = false
-  for (const a of Object.values(pool.accounts)) {
-    if (liveId && a.id === liveId) continue
-    if (a.usage && now - a.usage.fetchedAt < USAGE_STALE_MS) continue
-    if (!a.auth) continue
+  const targets = Object.values(pool.accounts).filter((a) => {
+    if (liveId && a.id === liveId) return false
+    if (a.usage && now - a.usage.fetchedAt < USAGE_STALE_MS) return false
+    return !!a.auth
+  })
+  if (!targets.length) return pool
+  const results = await Promise.all(targets.map(async (a) => {
     try {
       const { billing, auth } = await probeBilling(a.auth)
-      if (auth && typeof auth === 'object') a.auth = auth
-      const cfg = billing?.config || {}
-      const frac = usageFraction(billing)
-      const percent = frac != null ? frac * 100 : (typeof cfg.creditUsagePercent === 'number' ? cfg.creditUsagePercent : null)
-      const period = cfg.currentPeriod || {}
-      a.usage = {
-        percent,
-        used: cfg.used?.val ?? null,
-        limit: cfg.monthlyLimit?.val ?? null,
-        periodEnd: period.end || cfg.billingPeriodEnd || null,
-        periodType: period.type || null,
-        tier: billing.subscription_tier || billing.subscriptionTier || null,
-        fetchedAt: Date.now(),
-        onDemandCap: cfg.onDemandCap?.val ?? null,
-        onDemandUsed: cfg.onDemandUsed?.val ?? null,
-        prepaid: cfg.prepaidBalance?.val ?? null,
-        onDemandEnabled: !!(billing.on_demand_enabled ?? billing.onDemandEnabled),
-      }
-      a.exhausted = percent != null && percent >= EXHAUSTED_PCT
-      a.exhaustedAt = a.exhausted ? Date.now() : null
-      changed = true
+      return { id: a.id, billing, auth }
     } catch (e) {
       ;(log || logSink).warn?.(`[account] probe ${a.email}: ${e.message}`)
+      return null
     }
+  }))
+  const pool2 = loadPool()
+  let changed = false
+  for (const r of results) {
+    if (!r) continue
+    const a = pool2.accounts[r.id]
+    if (!a) continue
+    if (r.auth && typeof r.auth === 'object') a.auth = r.auth
+    applyBillingToAccount(a, r.billing)
+    changed = true
   }
-  if (changed) savePool(pool)
-  return pool
+  if (changed) savePool(pool2)
+  return pool2
 }
 
 let authWatcher = null

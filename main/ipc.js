@@ -19,6 +19,7 @@ import {
   ingestAuthFile, syncActiveFromDisk, activateAccount, pickNextAccount,
   removeAccount, clearPool, recordUsage, mergePoolBilling, refreshInactiveUsage,
   isUsageLimitError, isBillingExhausted,
+  getActiveAuth, fetchBillingDirect, fetchAutoTopupDirect,
 } from './account.js'
 import * as computerUse from './computer-use.js'
 import { readmePath } from './paths.js'
@@ -177,6 +178,8 @@ export function wireIpc({ engine, win, log, settingsRef, stayAwake, onSettingsCh
   })
 
   let accountSwitching = false
+  let accountSwitchDone = Promise.resolve()
+  const deletedUntil = new Map() // sessionId -> expiry ms; hide rm'd rows from sessions/changed echo
   async function restartEngine() {
     return await engine.start(buildSpawnOpts(settingsRef.value, {}, loadCredentials))
   }
@@ -192,23 +195,38 @@ export function wireIpc({ engine, win, log, settingsRef, stayAwake, onSettingsCh
       throw new Error('还有回合在生成，等它结束后再切号')
     }
     accountSwitching = true
+    let settleSwitch
+    accountSwitchDone = new Promise((r) => { settleSwitch = r })
     try {
       syncActiveFromDisk()
       const from = getAccount()
       const next = activateAccount(id)
-      try { await engine.stop() } catch {}
+      try {
+        await engine.stop({
+          abortExtra: { _accountSwitch: true, _switchedTo: next.email || next.id || '' },
+        })
+      } catch (e) {
+        log.warn(`切号停引擎: ${e.message}`)
+      }
+      let restartErr = null
       try { await restartEngine() }
-      catch (e) { log.warn(`切号后重启引擎失败: ${e.message}`) }
+      catch (e) {
+        restartErr = e
+        log.warn(`切号后重启引擎失败: ${e.message}`)
+      }
       send('evt:account-switched', {
-        ok: true,
+        ok: !restartErr,
+        error: restartErr?.message || null,
         reason: reason || 'manual',
         from: from.email || null,
         to: next.email,
         toId: next.id,
       })
+      if (restartErr) throw restartErr
       return next
     } finally {
       accountSwitching = false
+      settleSwitch()
     }
   }
   async function failoverOnQuota(err) {
@@ -231,6 +249,13 @@ export function wireIpc({ engine, win, log, settingsRef, stayAwake, onSettingsCh
     try {
       return await engine.prompt({ sessionId, text, attachments })
     } catch (err) {
+      if (err?.message === 'SESSION_NOT_LOADED') throw err
+      if (/^ACCOUNT_SWITCHED:/.test(err?.message || '')) {
+        // Parallel in-flight prompts abort during stop(), before restartEngine().
+        await accountSwitchDone
+        if (!engine.running) throw new Error(ERR_NO_ENGINE)
+        throw err
+      }
       const next = await failoverOnQuota(err)
       if (!next) throw err
       throw new Error(`ACCOUNT_SWITCHED:${next.email}`)
@@ -359,9 +384,20 @@ export function wireIpc({ engine, win, log, settingsRef, stayAwake, onSettingsCh
     return true
   })
 
-  ipcMain.handle('sessions:list', () => listSessions())
+  ipcMain.handle('sessions:list', async () => {
+    const now = Date.now()
+    for (const [sid, exp] of deletedUntil) {
+      if (exp <= now) deletedUntil.delete(sid)
+    }
+    const list = await listSessions()
+    if (!deletedUntil.size) return list
+    return list.filter((s) => !deletedUntil.has(s.id))
+  })
   ipcMain.handle('sessions:delete', async (_e, { id, cwd } = {}) => {
     assertShape(str(id) && str(cwd), 'sessions:delete')
+    try { await engine.dropSession({ sessionId: id }) }
+    catch (e) { log.warn(`sessions:delete dropSession: ${e.message}`) }
+    deletedUntil.set(id, Date.now() + 20000)
     return await deleteSession({ id, cwd })
   })
   ipcMain.handle('workflow:live-tokens', (_e, { cwd, agentIds } = {}) => {
@@ -437,9 +473,15 @@ export function wireIpc({ engine, win, log, settingsRef, stayAwake, onSettingsCh
   ipcMain.handle('stats:get', () => getStats())
 
   ipcMain.handle('usage:get', async (_e, { deep } = {}) => {
-    if (!engine.running) throw new Error(ERR_NO_ENGINE)
-    const live = await engine.billing()
     const cur = getAccount()
+    let live = null
+    try {
+      live = await fetchBillingDirect(getActiveAuth())
+    } catch (e) {
+      log.warn(`直连额度接口失败: ${e.message}`)
+      if (!engine.running) throw new Error(ERR_NO_ENGINE)
+      live = await engine.billing()
+    }
     if (cur.activeId) recordUsage(cur.activeId, live)
     if (deep) {
       try {
@@ -458,8 +500,13 @@ export function wireIpc({ engine, win, log, settingsRef, stayAwake, onSettingsCh
     return merged
   })
   ipcMain.handle('usage:topup-rule', async () => {
-    if (!engine.running) throw new Error(ERR_NO_ENGINE)
-    return await engine.autoTopupRule()
+    try {
+      return await fetchAutoTopupDirect(getActiveAuth())
+    } catch (e) {
+      log.warn(`直连 auto-topup 失败: ${e.message}`)
+      if (!engine.running) return { rule: null }
+      return await engine.autoTopupRule()
+    }
   })
 
   ipcMain.handle('account:info-live', async () => {
@@ -489,7 +536,18 @@ export function wireIpc({ engine, win, log, settingsRef, stayAwake, onSettingsCh
     } else if (cur.activeId === id) {
       try { await engine.stop() } catch {}
       try { await restartEngine() }
-      catch (e) { log.warn(`移除当前账号后重启引擎失败: ${e.message}`) }
+      catch (e) {
+        log.warn(`移除当前账号后重启引擎失败: ${e.message}`)
+        const after = getAccount()
+        send('evt:account-switched', {
+          ok: false,
+          error: e.message,
+          reason: 'remove',
+          from: cur.email || null,
+          to: after.email || null,
+          toId: after.activeId || null,
+        })
+      }
     }
     return getAccount()
   })

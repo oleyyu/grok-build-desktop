@@ -357,6 +357,21 @@ function heroWaitUnparked() {
 function heroMaybeUnpark() {
   if (heroWake) heroWake()
 }
+// 汉字一格≈两三个英文字母的信息量；按格等时打，中文整句会秒完。英文延迟不动。
+// 全角/CJK 标点也按汉字计，不然「你来啦！」这种短句会被标点拖回英文本拍。
+const HERO_CJK_SCALE = 2.8
+function heroCjkUnit(ch) {
+  if (/^\p{Script=Han}$/u.test(ch)) return true
+  const c = ch.codePointAt(0)
+  return (c >= 0x3000 && c <= 0x303f) || (c >= 0xff00 && c <= 0xffef)
+}
+function heroTypeMs(ch) {
+  const ms = 50 + Math.random() * 65
+  return heroCjkUnit(ch) ? ms * HERO_CJK_SCALE : ms
+}
+function heroDeleteMs(ch) {
+  return heroCjkUnit(ch) ? Math.round(26 * HERO_CJK_SCALE) : 26
+}
 function startHeroTyper() {
   const node = $('heroTyped')
   const line = $('heroLine')
@@ -377,7 +392,7 @@ function startHeroTyper() {
         for (let n = 1; n <= chars.length; n++) {
           if (heroParked()) await heroWaitUnparked()
           node.textContent = chars.slice(0, n).join('')
-          await sleep(50 + Math.random() * 65)
+          await sleep(heroTypeMs(chars[n - 1]))
         }
         line.classList.remove('typing')
         await sleep(2500)
@@ -385,7 +400,7 @@ function startHeroTyper() {
         for (let n = chars.length - 1; n >= 0; n--) {
           if (heroParked()) await heroWaitUnparked()
           node.textContent = chars.slice(0, n).join('')
-          await sleep(26)
+          await sleep(heroDeleteMs(chars[n]))
         }
         line.classList.remove('typing')
         await sleep(450)
@@ -436,7 +451,7 @@ function queueMdFlush() {
   requestAnimationFrame(() => {
     mdFlushQueued = false
     for (const item of mdDirty) {
-      if (item.mdNode) renderMd(item.mdNode, item.text)
+      if (item.mdNode) renderMd(item.mdNode, itemVisibleText(item))
     }
     mdDirty.clear()
     scrollDown(false)
@@ -767,6 +782,70 @@ function stripShotTag(s) {
   return typeof s === 'string' ? s.replace(SHOT_TAG, '').replace(/[ \t]+$/gm, '') : s
 }
 
+// grok 把技能列表 / MCP 状态 / 后台任务完成等塞进对话。TUI 不进滚动区；桌面端以前当用户气泡。
+// 判定顺序：chunk hideFromScrollback → promptId 来源（notifications-/workflow-completed-…）
+// → 已知系统唤醒正文（workflow 完成那句没有 <system-reminder> 包装）→ 标签前缀。
+const SYS_REMINDER_BLOCK = /<system[-_]reminder\b[^>]*>[\s\S]*?<\/system[-_]reminder\s*>/gi
+const SYS_REMINDER_OPEN = /<system[-_]reminder\b/i
+const HIDDEN_PROMPT_PREFIXES = [
+  'task-completed-',
+  'subagent-completed-',
+  'workflow-completed-',
+  'notifications-',
+  'goal-summary-',
+  'goal-classifier-nudge-',
+]
+function chunkMeta(u) {
+  return u?._meta || u?.meta || null
+}
+function isHiddenPromptId(pid) {
+  if (!pid) return false
+  return HIDDEN_PROMPT_PREFIXES.some((p) => String(pid).startsWith(p))
+}
+function isSystemReminderPayload(text) {
+  const s = String(text || '')
+  const t = s.trimStart()
+  if (/^<system[-_]reminder[\s>]/i.test(t)) return true
+  if (/^<monitor-event\b/i.test(t)) return true
+  if (t === '---') return true
+  // WorkflowCompleted / NotificationDrain 注入：模型指令，不是用户打的字。
+  if (/^A background workflow (stopped|finished)\b/i.test(t)) return true
+  const first = t.split('\n', 1)[0] || ''
+  return /^\d/.test(first) && first.includes(' monitor events from ') && first.includes(' (use ')
+}
+function isHiddenUserChunk(u, text, params) {
+  const meta = chunkMeta(u)
+  if (meta?.hideFromScrollback) return true
+  const pi = meta?.promptIndex
+  if (pi != null && S.active?.hiddenPromptIdx?.has(pi)) return true
+  const pid = params?._meta?.promptId || meta?.promptId
+  if (isHiddenPromptId(pid)) return true
+  return isSystemReminderPayload(text)
+}
+function hideIncompleteReminder(s) {
+  const lt = s.lastIndexOf('<')
+  if (lt < 0) return s
+  const tail = s.slice(lt).toLowerCase()
+  if (tail.includes('>') || tail.length < 2) return s
+  if ('<system-reminder'.startsWith(tail) || '<system_reminder'.startsWith(tail)) return s.slice(0, lt)
+  return s
+}
+function stripSystemReminders(text) {
+  if (typeof text !== 'string' || !text) return text || ''
+  if (text.indexOf('<') < 0) return text
+  let out = text.replace(SYS_REMINDER_BLOCK, '')
+  const unclosed = SYS_REMINDER_OPEN.exec(out)
+  if (unclosed) out = out.slice(0, unclosed.index)
+  else out = hideIncompleteReminder(out)
+  return out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n')
+}
+function itemVisibleText(it) {
+  if (!it) return ''
+  if (it.displayText != null) return it.displayText
+  if (it.kind === 'assistant') return stripSystemReminders(it.text || '')
+  return it.text || ''
+}
+
 function infoLine(text, isErr) {
   if (!S.active) return
   pushItem({ kind: 'info', el: el('div', 'info-line' + (isErr ? ' err' : ''), text) })
@@ -781,9 +860,15 @@ function handleUpdate(params) {
     return
   }
   if (params.sessionId) S.lastEventBySession.set(params.sessionId, Date.now())
+  if (k === 'turn_completed') {
+    onTurnCompleted(params.sessionId, u, params)
+    return
+  }
   const btw = S.btwWatch.get(params.sessionId)
   if (btw) { btw(u); return }
   if (!S.active || params.sessionId !== S.active.sessionId) return
+  // session/load 回放期间禁止把本地 echo 当成吸收器，否则会吞掉历史 user chunk。
+  if (S.loadingSession && S.active.echoAbsorb) S.active.echoAbsorb = null
   const tt = params._meta?.totalTokens
   if (typeof tt === 'number' && tt > 0) {
     TS.tokens = tt
@@ -798,21 +883,25 @@ function handleUpdate(params) {
 
   if (k === 'user_message_chunk') {
     const text = u.content?.text ?? ''
-    const pi = u._meta?.promptIndex
+    const pi = chunkMeta(u)?.promptIndex
+    const hidden = isHiddenUserChunk(u, text, params)
+    if (hidden && pi != null) {
+      if (!S.active.hiddenPromptIdx) S.active.hiddenPromptIdx = new Set()
+      S.active.hiddenPromptIdx.add(pi)
+    }
     if (S.active.echoAbsorb) {
       const ea = S.active.echoAbsorb
-      // 只吸收同一条消息的回显：promptIndex 变了说明是下一条（快速插队时
-      // 上一回合可能一个 agent 事件都没出就被取消，吸收态还挂着——别把新消息吞了）
-      if (pi == null || ea.promptIndex == null || ea.promptIndex === pi) {
+      // 隐藏注入（后台任务完成等）不是用户回显，不能吞进 echoAbsorb。
+      if (!hidden && (pi == null || ea.promptIndex == null || ea.promptIndex === pi)) {
         if (pi != null) ea.promptIndex = pi
         return
       }
-      S.active.echoAbsorb = null
+      if (pi != null && ea.promptIndex != null && ea.promptIndex !== pi) S.active.echoAbsorb = null
     }
     // 没被本地回显吸收的 user chunk = 队列 drain / 插队开跑的新回合（或 goal 注入）。
     // 把生成态钉到新回合上：换代 epoch —— 旧回合 send() 的 finally 从此无权收尾。
-    // session/load 回放（loadingSession）除外；已是队列回合在流式中也不用重复激活。
-    if (!S.loadingSession) {
+    // session/load 回放（loadingSession / isReplay）除外；已是队列回合在流式中也不用重复激活。
+    if (!S.loadingSession && !params._meta?.isReplay) {
       const sid = S.active.sessionId
       if (TS.cancelling && TS.sessionId === sid) {
         // Stop 之后 grok 若把排队的下一条立刻开跑，不要 tsBegin 把「正在停止」冲掉。
@@ -834,6 +923,7 @@ function handleUpdate(params) {
         }
       }
     }
+    if (hidden) return
     const last = lastItem()
     if (last?.kind === 'user' && (pi == null || last.promptIndex === pi)) {
       last.text += text
@@ -862,6 +952,9 @@ function handleUpdate(params) {
     let last = lastItem()
     if (last?.kind !== 'assistant' || last.isPlan) last = newAssistantItem()
     last.text += u.content?.text ?? ''
+    last.displayText = stripSystemReminders(last.text)
+    last.el.hidden = !last.displayText.trim()
+    if (last.el.hidden) return
     mdDirty.add(last)
     queueMdFlush()
   } else if (k === 'tool_call') {
@@ -1108,7 +1201,16 @@ $('input').addEventListener('paste', (e) => {
 // session:load 会把整段历史当 session/update 事件重放回来 —— 恢复必须走全套纪律：
 // 清屏 + 挂 loadingSession，否则转录翻倍，回放的 user_message_chunk 还会误触发
 // 激活块，造出一个停不掉的幽灵回合（永转的 spinner、点不动的停止键）
+let restoreChain = Promise.resolve()
 async function restoreActiveSession(sess) {
+  const job = restoreChain.then(
+    () => restoreActiveSessionBody(sess),
+    () => restoreActiveSessionBody(sess),
+  )
+  restoreChain = job.then(() => {}, () => {})
+  return job
+}
+async function restoreActiveSessionBody(sess) {
   sess = sess || S.active
   if (!sess) return true
   // 引擎重启后残留的队列代际必是幽灵（真队列回合已随旧进程死了）：当场收尾
@@ -1164,6 +1266,10 @@ async function send() {
     }
     text = routed.text // 别名/裸 skill 名已改写成引擎认识的写法
     input.value = text
+  }
+  if (S.loadingSession) {
+    toast(t('Restoring session…'))
+    return
   }
   // 只锁「当前这个会话」：别的会话在生成不拦着这里发（多会话并行干活）
   // 目标会话进门时定格成快照：后面每个 await 期间用户都可能切走，消息只认它
@@ -1264,6 +1370,16 @@ async function send() {
   } catch (err) {
     if (isAccountSwitchedErr(err) && target) {
       await handleAccountSwitchRetry(err, target, sessionId, text, attachments, giveBack)
+    } else if (isSessionNotLoadedErr(err) && target) {
+      if (await restoreActiveSession(target)) {
+        try {
+          const r2 = await api('session:prompt', { sessionId, text, attachments })
+          applyPromptResult(r2, sessionId)
+        } catch (err2) {
+          turnInfo(sessionId, `${t('Error')}: ${err2.message}`, true)
+          giveBack()
+        }
+      } else giveBack()
     } else {
       turnInfo(target?.sessionId || lockKey, `${t('Error')}: ${err.message}`, true)
       giveBack()
@@ -1290,6 +1406,9 @@ async function send() {
 function isAccountSwitchedErr(err) {
   return /^ACCOUNT_SWITCHED:/.test(err?.message || '')
 }
+function isSessionNotLoadedErr(err) {
+  return err?.message === 'SESSION_NOT_LOADED'
+}
 function applyPromptResult(r, sessionId) {
   if (!r) return
   if (r._meta) {
@@ -1308,7 +1427,7 @@ function applyPromptResult(r, sessionId) {
 async function handleAccountSwitchRetry(err, target, sessionId, text, attachments, giveBack) {
   resetAfterAccountChange()
   prefetchAccount(true).catch(() => {})
-  prefetchUsage(true).catch(() => {})
+  prefetchUsage(true, { deep: true }).catch(() => {})
   if (!(await restoreActiveSession(target))) { giveBack?.(); return }
   try {
     const r = await api('session:prompt', { sessionId, text, attachments })
@@ -1418,13 +1537,23 @@ async function queueSend(sessionId, text, attachments) {
     const r = await api('session:prompt', { sessionId, text, attachments })
     applyPromptResult(r, sessionId)
   } catch (err) {
-    if (isAccountSwitchedErr(err)) {
+    if (isAccountSwitchedErr(err) || isSessionNotLoadedErr(err)) {
       const listed = S.sessions.find((s) => s.id === sessionId)
       const sess = (S.active?.sessionId === sessionId)
         ? S.active
         : (listed ? { sessionId, cwd: listed.cwd } : null)
-      if (sess?.cwd) await handleAccountSwitchRetry(err, sess, sessionId, text, attachments, null)
-      else turnInfo(sessionId, `${t('Queued message failed')}: ${err.message}`, true)
+      if (sess?.cwd && isAccountSwitchedErr(err)) {
+        await handleAccountSwitchRetry(err, sess, sessionId, text, attachments, null)
+      } else if (sess?.cwd && isSessionNotLoadedErr(err)) {
+        if (await restoreActiveSession(sess)) {
+          try {
+            const r2 = await api('session:prompt', { sessionId, text, attachments })
+            applyPromptResult(r2, sessionId)
+          } catch (err2) {
+            turnInfo(sessionId, `${t('Queued message failed')}: ${err2.message}`, true)
+          }
+        }
+      } else turnInfo(sessionId, `${t('Queued message failed')}: ${err.message}`, true)
     } else {
       turnInfo(sessionId, `${t('Queued message failed')}: ${err.message}`, true)
     }
@@ -1455,6 +1584,30 @@ function maybeEndQueuedTurnUI(sessionId) {
   }
   if (TS.sessionId === sessionId) tsEnd()
   refreshSendState()
+}
+
+// 引擎走 `_x.ai/session/update` 发 durable TurnCompleted。普通用户回合还有 session/prompt
+// RPC 的 finally 收尾；workflow/notification drain 是引擎自己塞进队列的隐藏回合，
+// 没有对应的 session:prompt，而且结束时不广播 queue/changed（queue_meta 为空），
+// 若不在这里收，状态行会永远停在 Responding…。
+function onTurnCompleted(sessionId, u, envelope) {
+  if (!sessionId || S.loadingSession || envelope?._meta?.isReplay) return
+  const pid = u?.prompt_id || u?.promptId
+  const q = S.queue.get(sessionId)
+  if (q && q.runningPromptId) {
+    // 隐藏唤醒回合结束时不广播 queue/changed，runningPromptId 会钉死 queueHasWork。
+    // 只清「就是这一轮」或「两端都是合成 prompt」——别误清用户已经开跑的下一轮。
+    if (!pid || q.runningPromptId === pid
+        || (isHiddenPromptId(pid) && isHiddenPromptId(q.runningPromptId))) {
+      q.runningPromptId = null
+    }
+  }
+  maybeEndQueuedTurnUI(sessionId)
+  const usage = u?.usage
+  applyPromptResult({
+    stopReason: u?.stop_reason || u?.stopReason,
+    _meta: usage && typeof usage === 'object' ? usage : undefined,
+  }, sessionId)
 }
 
 function interjectTop(sessionId) {
@@ -1671,13 +1824,13 @@ function armCancelWatchdog(sessionId) {
   const prev = cancelWatchdogs.get(sessionId)
   if (prev) clearTimeout(prev)
   // Engine aborts the prompt RPC at 15s. This is a UI backstop if IPC never returns.
-  const t = setTimeout(() => {
+  const timer = setTimeout(() => {
     cancelWatchdogs.delete(sessionId)
     if (!sendingSessions.has(sessionId)) return
     turnInfo(sessionId, t('Stop did not finish — the turn was released locally. If Grok keeps going, press Stop again or restart the engine.'), true)
     forceEndTurn(sessionId)
   }, 20000)
-  cancelWatchdogs.set(sessionId, t)
+  cancelWatchdogs.set(sessionId, timer)
 }
 
 function requestCancel(sessionId) {
@@ -1888,7 +2041,9 @@ async function scSubmit(q) {
         if (!c) return
         if (u.sessionUpdate === 'agent_message_chunk') {
           c.text += u.content?.text ?? ''
-          renderMd(c.mdNode, c.text)
+          c.displayText = stripSystemReminders(c.text)
+          if (!c.displayText.trim()) return
+          renderMd(c.mdNode, c.displayText)
           $('scBody').scrollTop = $('scBody').scrollHeight
         } else if (u.sessionUpdate === 'tool_call' && !c.text) {
           c.mdNode.textContent = t('(running tools…)')
@@ -1914,9 +2069,22 @@ async function scSubmit(q) {
       clearInterval(stallTimer)
     }
     if (done?.__stalled) requestCancel(sideId)
-    if (!card.text) card.mdNode.textContent = t('(no answer)')
+    if (!itemVisibleText(card).trim()) card.mdNode.textContent = t('(no answer)')
   } catch (err) {
-    card.mdNode.textContent = `${t('Error')}: ${err.message}`
+    if ((isAccountSwitchedErr(err) || isSessionNotLoadedErr(err)) && SC.sessionId && SC.cwd) {
+      try {
+        await api('session:load', {
+          sessionId: SC.sessionId, cwd: SC.cwd,
+          presetId: S.settings?.presets?.default || null,
+        })
+        await api('session:prompt', { sessionId: SC.sessionId, text: q })
+        if (!itemVisibleText(card).trim()) card.mdNode.textContent = t('(no answer)')
+      } catch (err2) {
+        card.mdNode.textContent = `${t('Error')}: ${err2.message}`
+      }
+    } else {
+      card.mdNode.textContent = `${t('Error')}: ${err.message}`
+    }
   } finally {
     SC.busy = false
     $('sideChat').classList.remove('busy')
@@ -1957,7 +2125,7 @@ function findRun(q) {
   q = q.trim().toLowerCase()
   if (!q) { FIND.count.textContent = ''; return }
   for (const it of S.active?.items || []) {
-    const hay = `${it.text || ''}\n${it.title || ''}`.toLowerCase()
+    const hay = `${itemVisibleText(it)}\n${it.title || ''}`.toLowerCase()
     if (hay.includes(q) && it.el?.isConnected) FIND.hits.push(it.el)
   }
   FIND.count.textContent = `0/${FIND.hits.length}`
@@ -2063,6 +2231,7 @@ const BUILTIN_ACTIONS = {
     const cur = S.active
     if (!cur) { toast(t('No active session')); return }
     try {
+      if (sendingSessions.has(cur.sessionId)) requestCancel(cur.sessionId)
       await api('sessions:delete', { id: cur.sessionId, cwd: cur.cwd })
       S.sessions = S.sessions.filter((x) => x.id !== cur.sessionId)
       S.active = null
@@ -2129,8 +2298,10 @@ const BUILTIN_ACTIONS = {
     const items = S.active?.items || []
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i]
-      if (it.kind === 'assistant' && !it.isPlan && it.text) {
-        try { await navigator.clipboard.writeText(it.text); toast(t('Copied')) } catch { toast(t('Copy failed')) }
+      if (it.kind === 'assistant' && !it.isPlan) {
+        const vis = itemVisibleText(it).trim()
+        if (!vis) continue
+        try { await navigator.clipboard.writeText(vis); toast(t('Copied')) } catch { toast(t('Copy failed')) }
         return
       }
     }
@@ -2141,7 +2312,10 @@ const BUILTIN_ACTIONS = {
     const parts = []
     for (const it of items) {
       if (it.kind === 'user' && it.text) parts.push(`## You\n\n${it.text}`)
-      else if (it.kind === 'assistant' && it.text) parts.push(`## ${it.isPlan ? 'Plan' : 'Grok'}\n\n${it.text}`)
+      else if (it.kind === 'assistant') {
+        const vis = itemVisibleText(it).trim()
+        if (vis) parts.push(`## ${it.isPlan ? 'Plan' : 'Grok'}\n\n${vis}`)
+      }
       else if (it.kind === 'tool' && it.title) parts.push(`> [${it.toolKind || 'tool'}] ${it.title}`)
     }
     if (S.active?.plan?.length) {
@@ -2408,6 +2582,7 @@ async function switchModel(modelId) {
       toast(r.via === 'live' ? `${t('Switched to')} ${modelDisplay(modelId)}` : `${t('Switched to')} ${modelDisplay(modelId)} ${t('(engine restarted, session restored)')}`)
     } catch (err) {
       toast(`${t('Switch failed')}: ${err.message}`)
+      if (S.engineRunning && S.active === sess) await restoreActiveSession(sess)
     }
   } else {
     toast(`${t('New sessions will use')} ${modelDisplay(modelId)}`)
@@ -2538,6 +2713,7 @@ async function applyEffort(effortId) {
         : `${t('Effort set to')} ${t(EFFORT_LABELS[effortId] || effortId)} ${t('(engine restarted, session restored)')}`)
     } catch (err) {
       toast(`${t('Effort change failed')}: ${err.message}`)
+      if (S.engineRunning && S.active === sess) await restoreActiveSession(sess)
     }
   } else {
     toast(`${t('New sessions will use')} ${t(EFFORT_LABELS[effortId] || effortId)}`)
@@ -2852,7 +3028,7 @@ function openUsagePop(anchor, { above = false } = {}) {
   const pop = el('div', 'cu-pop')
   const render = () => pop.replaceChildren(...buildUsagePopChildren(render))
   render()
-  Promise.resolve(prefetchUsage(UL.b ? false : true)).then(() => {
+  Promise.resolve(prefetchUsage(UL.b ? false : true, { deep: !UL.b })).then(() => {
     if (popoverFor === anchor && pop.isConnected) render()
   }).catch(() => {})
   showPopover(anchor, [], { custom: pop, above })
@@ -2948,6 +3124,7 @@ function renderSessionList() {
       del.addEventListener('click', async (e) => {
         e.stopPropagation()
         try {
+          if (sendingSessions.has(s.id)) requestCancel(s.id)
           await api('sessions:delete', { id: s.id, cwd: s.cwd })
           S.sessions = S.sessions.filter((x) => x.id !== s.id)
           if (S.active?.sessionId === s.id) {
@@ -3068,39 +3245,15 @@ on('evt:engine-ready', (init) => {
   $('bannerArea').innerHTML = ''
   updateMeta()
   prefetchAccount(true)
-  prefetchUsage(true)
+  prefetchUsage(true, { deep: true })
 })
 
-on('evt:engine-exit', (info) => {
-  if ($('permArea').children.length || livePerms.size || S.pendingPerms.size) {
-    $('permArea').innerHTML = ''
-    livePerms.clear()
-    S.pendingPerms.clear() // waiters died with the engine process
-    toast(t('Pending permission requests were cancelled'))
-  }
-  // 队列随引擎进程死光：清本地镜像，队列认领的回合当场收尾——不能只 clear()
-  // 代际集（那会让 maybeEndQueuedTurnUI 的成员测试永远失败，生成态卡死、发送键锁死）
-  S.queue.clear()
-  renderQueueRow()
-  for (const t of cancelWatchdogs.values()) clearTimeout(t)
-  cancelWatchdogs.clear()
-  for (const [sid, epoch] of [...sendingSessions]) {
-    if (!queueTurnEpochs.has(epoch)) continue // send() 认领的回合由它自己的 finally 收
-    sendingSessions.delete(sid)
-    queueTurnEpochs.delete(epoch)
-    if (S.active?.sessionId === sid) {
-      S.active.streaming = false
-      finishAllThoughts()
-    }
-    if (TS.sessionId === sid) tsEnd()
-  }
-  refreshSendState()
-  if (info?.intentional) return
+function showEngineDownBanner(message) {
   setEngineState(false)
   const area = $('bannerArea')
   area.innerHTML = ''
   const b = el('div', 'banner')
-  b.append(el('span', 'grow', t('The grok engine process exited.')))
+  b.append(el('span', 'grow', message || t('The grok engine process exited.')))
   const btn = el('button', null, t('Restart engine'))
   btn.addEventListener('click', async () => {
     btn.disabled = true
@@ -3115,6 +3268,37 @@ on('evt:engine-exit', (info) => {
   })
   b.append(btn)
   area.append(b)
+}
+
+on('evt:engine-exit', (info) => {
+  if ($('permArea').children.length || livePerms.size || S.pendingPerms.size) {
+    $('permArea').innerHTML = ''
+    livePerms.clear()
+    S.pendingPerms.clear() // waiters died with the engine process
+    toast(t('Pending permission requests were cancelled'))
+  }
+  // 队列随引擎进程死光：清本地镜像，队列认领的回合当场收尾——不能只 clear()
+  // 代际集（那会让 maybeEndQueuedTurnUI 的成员测试永远失败，生成态卡死、发送键锁死）
+  S.queue.clear()
+  renderQueueRow()
+  for (const timer of cancelWatchdogs.values()) clearTimeout(timer)
+  cancelWatchdogs.clear()
+  for (const [sid, epoch] of [...sendingSessions]) {
+    if (!queueTurnEpochs.has(epoch)) continue // send() 认领的回合由它自己的 finally 收
+    sendingSessions.delete(sid)
+    queueTurnEpochs.delete(epoch)
+    if (S.active?.sessionId === sid) {
+      S.active.streaming = false
+      finishAllThoughts()
+    }
+    if (TS.sessionId === sid) tsEnd()
+  }
+  refreshSendState()
+  // Intentional stop still means the process is gone. Keep the crash banner
+  // off (restart is in flight), but never leave the UI thinking grok is live.
+  setEngineState(false)
+  if (info?.intentional) return
+  showEngineDownBanner()
 })
 
 on('evt:session-update', handleUpdate)
@@ -3141,17 +3325,32 @@ on('evt:engine-notification', ({ method, params }) => {
     // goal 回合的同回合注入回显（非 goal 走 cancel+新回合，引擎不发这个广播；
     // 引擎注明：广播即回显，之后不再发 user_message_chunk）
     if (params?.sessionId === S.active?.sessionId && params?.text) {
+      if (params.hideFromScrollback || isHiddenPromptId(params.promptId)
+          || isSystemReminderPayload(params.text)) return
       const item = newUserItem(null)
       item.text = params.text
       item.bodyNode.textContent = params.text
       scrollDown(false)
     }
+  } else if (/x\.ai\/session\/update$/.test(method)) {
+    const u = params?.update
+    if (u?.sessionUpdate === 'turn_completed') {
+      onTurnCompleted(params?.sessionId, u, params)
+    }
+  } else if (/x\.ai\/session\/prompt_complete$/.test(method)) {
+    onTurnCompleted(params?.sessionId, {
+      prompt_id: params?.promptId || params?.prompt_id,
+      stop_reason: params?.stopReason || params?.stop_reason,
+      usage: params?.usage,
+    }, params)
   } else if (/x\.ai\/session_notification$/.test(method)) {
     // {sessionId, update:{sessionUpdate:'workflow_updated', run_id, phases, agents…}}
     const u = params?.update
     if (u?.sessionUpdate === 'workflow_updated') {
       if (params?.sessionId && !u.sessionId) u.sessionId = params.sessionId
       wfIngest(u)
+    } else if (u?.sessionUpdate === 'turn_completed') {
+      onTurnCompleted(params?.sessionId, u, params)
     }
   }
 })
@@ -3525,16 +3724,18 @@ function prefetchAccount(force) {
 }
 
 const UL = { b: null, rule: null, at: 0, lastErr: null, inflight: null, wantDeep: false }
-function prefetchUsage(force) {
-  if (UL.inflight && (!force || UL.wantDeep)) return UL.inflight
+function prefetchUsage(force, { deep = false } = {}) {
+  if (UL.inflight && (!force || (deep && UL.wantDeep))) return UL.inflight
   if (!force && UL.b && Date.now() - UL.at < 60e3) return Promise.resolve(UL)
-  const deep = !!force
-  UL.wantDeep = deep
+  UL.wantDeep = !!deep
   const p = (async () => {
     try {
-      const b = await api('usage:get', { deep })
+      const [b, ruleWrap] = await Promise.all([
+        api('usage:get', { deep: !!deep }),
+        api('usage:topup-rule').catch(() => null),
+      ])
       UL.b = b
-      UL.rule = (await api('usage:topup-rule').catch(() => null))?.rule || null
+      UL.rule = ruleWrap?.rule || null
       UL.at = Date.now()
       UL.lastErr = null
     } catch (e) {
@@ -3550,16 +3751,9 @@ function prefetchUsage(force) {
 
 async function renderUsageLimits(host, { headHost } = {}) {
   const loading = el('div', 'hint', t('Fetching subscription usage from the engine…'))
-  host.append(loading)
-  await prefetchUsage(true)
-  loading.remove()
-  const b = UL.b
-  if (!b) {
-    host.append(el('div', 'hint', `${t('Failed to fetch usage')}: ${UL.lastErr || ''} ${t('(open this page again once the engine is ready)')}`))
-    return
-  }
-
   const paint = () => {
+    const b = UL.b
+    if (!b || !host.isConnected) return false
     const cfg = b.config || {}
     const accts = Array.isArray(b._accounts) ? b._accounts : []
     const separate = planUsageMode() === 'separate' && accts.length > 1
@@ -3630,8 +3824,15 @@ async function renderUsageLimits(host, { headHost } = {}) {
     }
     host.replaceChildren(sect)
     if (headHost) headHost.replaceChildren(head)
+    return true
   }
-  paint()
+  if (!paint()) host.append(loading)
+  await prefetchUsage(true, { deep: true })
+  if (!host.isConnected) return
+  loading.remove()
+  if (!paint()) {
+    host.append(el('div', 'hint', `${t('Failed to fetch usage')}: ${UL.lastErr || ''} ${t('(open this page again once the engine is ready)')}`))
+  }
 }
 
 function openSettings(initialTab) {
@@ -4392,21 +4593,29 @@ on('evt:account-login-done', async ({ ok } = {}) => {
   if (!a?.loggedIn) return
   resetAfterAccountChange()
   prefetchAccount(true).catch(() => {})
-  prefetchUsage(true).catch(() => {})
+  prefetchUsage(true, { deep: true }).catch(() => {})
   toast(t('Signed in successfully'))
   if (!$('loginView').hidden) hideLoginViewAndContinue()
 })
 
-on('evt:account-switched', ({ to, from, reason } = {}) => {
+on('evt:account-switched', ({ to, from, reason, ok = true, error } = {}) => {
   resetAfterAccountChange()
   prefetchAccount(true).catch(() => {})
-  prefetchUsage(true).catch(() => {})
+  prefetchUsage(true, { deep: true }).catch(() => {})
+  void from
+  if (ok === false) {
+    const msg = to
+      ? t('Switched to {0}, but the engine did not restart.', to)
+      : t('Engine did not restart after switching accounts.')
+    toast(error ? `${msg} ${error}` : msg)
+    showEngineDownBanner(msg)
+    return
+  }
   if (reason === 'quota' && to) {
     toast(t('Quota exhausted — switched to {0}', to))
   } else if (to) {
     toast(t('Switched to {0}', to))
   }
-  void from
   // Main restart does not session/load; idle quota failover has no other restore.
   restoreActiveSession().catch(() => {})
 })

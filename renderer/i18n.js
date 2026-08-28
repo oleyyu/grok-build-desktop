@@ -576,6 +576,8 @@ window.I18N = (() => {
     'Sign out all': '全部登出',
     'Confirm sign-out all? (stops the engine)': '确认全部登出？（会停掉引擎）',
     'Switched to {0}': '已切换到 {0}',
+    'Engine did not restart after switching accounts.': '切号后引擎没有起来。',
+    'Switched to {0}, but the engine did not restart.': '已切到 {0}，但引擎没有起来。',
     'Removed {0}': '已移除 {0}',
     'Quota exhausted — switched to {0}': '额度用完，已切换到 {0}',
     'active': '当前',
